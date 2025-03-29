@@ -124,7 +124,8 @@ class OTAUpdater:
         # Fetch the latest code from the repo.
         response = requests.get(self.firmware_url)
         if response.status_code == 200:
-            logit(f'Fetched latest firmware code, status: {response.status_code}, -  {response.text}')
+            logit(f'Fetched latest firmware code, status: {response.status_code}')
+            #logit(f'Fetched latest firmware code, status: {response.status_code}, -  {response.text}')
     
             # Save the fetched code to memory
             self.latest_code = response.text
