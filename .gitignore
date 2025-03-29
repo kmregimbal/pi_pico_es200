@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# local stuff
+WIFI_CONFIG.py
+INFLUX_CONFIG.py
+SYSLOG_CONFIG.py
