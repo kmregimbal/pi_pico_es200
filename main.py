@@ -158,7 +158,7 @@ class OTAUpdater:
     def update_and_reset(self):
         """ Update the code and reset the device."""
 
-        logit(f"Updating device... (Renaming latest_code.py to {self.filename})", end="")
+        logit(f"Updating device... (Renaming latest_code.py to {self.filename})")
 
         # Overwrite the old code.
         os.rename('latest_code.py', self.filename)  
