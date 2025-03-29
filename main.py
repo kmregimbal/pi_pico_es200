@@ -18,7 +18,7 @@ wlan = network.WLAN(network.STA_IF)
 # OTA
 firmware_url = "https://github.com/kmregimbal/pi_pico_es200/main/"
 
-ota_updater = OTAUpdater(firmware_url, "main.py")
+
 
 
 # Serial Communications
@@ -466,6 +466,7 @@ def main():
     # connect wifi
     if connectWifi():
       logit("Connected to WiFi")
+      ota_updater = OTAUpdater(firmware_url, "main.py")
       ota_updater.download_and_install_update_if_available()
     # tell core 1 to reset each hard/soft UART then output the unlock key every 4.9 seconds
     _thread.start_new_thread(core1_task, (uart,battery_instance_list))
