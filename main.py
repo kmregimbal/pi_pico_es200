@@ -504,7 +504,7 @@ def main():
           minute = localtime()[4]
           if minute != last_influx_update_minute[n]: # post to influx once per minute
             name = battery.name()
-            work_string= f'battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
+            work_string= f'es200_battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
             # print(f"{work_string}")
             influx_string += work_string
             last_influx_update_minute[n] = minute
