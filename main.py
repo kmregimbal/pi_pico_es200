@@ -403,7 +403,7 @@ def postToInflux(data):
     print("ReConnecting to wifi...")
     connectWifi()
 
-  url = f"http://192.168.2.70:8086/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}"
+  url = f"http://192.168.1.70:8086/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}"
   headers = {
       "Authorization": f"Token {INFLUX_TOKEN}",
       "Content-Type": "text/plain; charset=utf-8",
