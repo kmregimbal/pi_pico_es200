@@ -14,6 +14,7 @@ from SYSLOG_CONFIG import SYSLOG_HOST, SYSLOG_PORT
 
 # WiFi
 wlan = network.WLAN(network.STA_IF)
+wifi_post_tries = 10
 
 # OTA
 firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
@@ -432,10 +433,15 @@ def logit(message):
   if syslog_sock is not None:
     syslog_sock.sendto(message.encode(), (SYSLOG_HOST,SYSLOG_PORT))
 
+def restart_pico():
+  logit("Restarting Pico due to wifi/influx posting issue")
+  machine.reset()  # Reset the device to run the new code.
+
 
 def main():
   # bad practice <sigh>
   global syslog_sock
+  global wifi_post_tries
 
   # check to make sure the RUN_PIN is low
   if RUN_PIN.value() == 1:
@@ -519,10 +525,15 @@ def main():
           # print(f'Posting data\n{influx_string}',end="")
           if postToInflux(influx_string) == True:
             logit("Posting data Success")
+            wifi_post_tries = 10
           else:
             logit("Posting data failed")
+            wifi_post_tries = wifi_post_tries - 1
+            if wifi_post_tries < 1:
+              restart_pico()
         except:
           logit("Posting data Failed via exception")
+          restart_pico()
 
 if __name__ == '__main__':
   main()
