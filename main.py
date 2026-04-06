@@ -410,7 +410,7 @@ def postToInflux(data):
       "Content-Type": "text/plain; charset=utf-8",
       "Accept": "application/json"
   }
-  response = requests.post(url, headers=headers, data=data)
+  response = requests.post(url, headers=headers, data=data, timeout=5)
   response_code = response.status_code
   if response_code != 204:
     logit(f"Response code was: {response_code}")
@@ -527,7 +527,7 @@ def main():
             logit("Posting data Success")
             wifi_post_tries = 10
           else:
-            logit("Posting data failed")
+            logit(f"Posting data failed. {wifi_post_tries} tries left")
             wifi_post_tries = wifi_post_tries - 1
             if wifi_post_tries < 1:
               restart_pico()
