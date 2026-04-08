@@ -444,6 +444,9 @@ def main():
   global syslog_sock
   global wifi_post_tries
 
+  # start outputing the unlock code right away
+  _thread.start_new_thread(core1_task, (uart,battery_instance_list))
+  
   # check to make sure the RUN_PIN is low
   if RUN_PIN.value() == 1:
     print("RUN_PIN is high.  Bailing out!")
@@ -477,7 +480,7 @@ def main():
       ota_updater = OTAUpdater(firmware_url, "main.py")
       ota_updater.download_and_install_update_if_available()
     # tell core 1 to reset each hard/soft UART then output the unlock key every 4.9 seconds
-    _thread.start_new_thread(core1_task, (uart,battery_instance_list))
+    
 
     last_influx_update_minute = [0] * len(battery_instance_list)
 
@@ -529,13 +532,16 @@ def main():
             wifi_post_tries = 10
           else:
             wifi_post_tries = wifi_post_tries - 1
-            logit(f"Posting data failed. {wifi_post_tries} tries left")
+            logit(f"Posting data failed. {wifi_post_tries} tries left. Pausing 15 seconds.")
             if wifi_post_tries < 1:
               restart_pico()
+            sleep(15)
         except:
           wifi_post_tries = wifi_post_tries - 1
-          logit(f"Posting data Failed via exception. {wifi_post_tries} tries left")
-          restart_pico()
+          logit(f"Posting data Failed via exception. {wifi_post_tries} tries left. Pausing 15 seconds.")
+          if wifi_post_tries < 1:
+              restart_pico()
+          sleep(15)
 
 if __name__ == '__main__':
   main()
