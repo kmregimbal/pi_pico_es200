@@ -430,7 +430,7 @@ def core1_task(uart,battery_instance_list):
 
 def logit(message):
   print(message)
-  # message = f"pi_pico_es200: {message}"
+  message = f"pi_pico_es200: {message}"
   if syslog_sock is not None:
     syslog_sock.sendto(message.encode(), (SYSLOG_HOST,SYSLOG_PORT))
 
@@ -444,8 +444,7 @@ def main():
   global syslog_sock
   global wifi_post_tries
 
-  # start outputing the unlock code right away
-  _thread.start_new_thread(core1_task, (uart,battery_instance_list))
+  
   
   # check to make sure the RUN_PIN is low
   if RUN_PIN.value() == 1:
@@ -474,6 +473,9 @@ def main():
         battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, name=battery))
         sm_count += 1
 
+    # start outputing the unlock code right away
+    _thread.start_new_thread(core1_task, (uart,battery_instance_list))
+    
     # connect wifi
     if connectWifi():
       logit("Connected to WiFi")
@@ -545,3 +547,4 @@ def main():
 
 if __name__ == '__main__':
   main()
+  
