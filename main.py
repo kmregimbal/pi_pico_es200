@@ -430,7 +430,7 @@ def core1_task(uart,battery_instance_list):
 
 def logit(message):
   print(message)
-  message = f"pi_pico_es200: {message}"
+  # message = f"pi_pico_es200: {message}"
   if syslog_sock is not None:
     syslog_sock.sendto(message.encode(), (SYSLOG_HOST,SYSLOG_PORT))
 
