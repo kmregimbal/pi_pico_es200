@@ -496,7 +496,7 @@ def main():
           if battery.isDischargeFETEnabled():
             discharge_enabled = 1
 
-          logstring += f"({battery.name()}) "
+          # logstring += f"({battery.name()}) "
           # logstring += f"SOC:{state_of_charge},"
           # logstring += f"Cycles:{cycle_count},"
           # logstring += f"Volts:{voltage:.2f},"
@@ -514,11 +514,11 @@ def main():
             # print(f"{work_string}")
             influx_string += work_string
             last_influx_update_minute[n] = minute
-      if len(logstring) > 0:
-        # print(logstring)
-        # if syslog_sock is not None:
-        #   syslog_sock.sendto(logstring.encode(), (SYSLOG_HOST,SYSLOG_PORT))
-        logit(logstring)
+      # if len(logstring) > 0:
+      #   # print(logstring)
+      #   # if syslog_sock is not None:
+      #   #   syslog_sock.sendto(logstring.encode(), (SYSLOG_HOST,SYSLOG_PORT))
+      #   logit(logstring)
       if len(influx_string) > 0:
         
         try:
@@ -527,12 +527,13 @@ def main():
             logit("Posting data Success")
             wifi_post_tries = 10
           else:
-            logit(f"Posting data failed. {wifi_post_tries} tries left")
             wifi_post_tries = wifi_post_tries - 1
+            logit(f"Posting data failed. {wifi_post_tries} tries left")
             if wifi_post_tries < 1:
               restart_pico()
         except:
-          logit("Posting data Failed via exception")
+          wifi_post_tries = wifi_post_tries - 1
+          logit(f"Posting data Failed via exception. {wifi_post_tries} tries left")
           restart_pico()
 
 if __name__ == '__main__':
