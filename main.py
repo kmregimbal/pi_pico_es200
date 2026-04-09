@@ -3,30 +3,36 @@ import _thread
 from machine import Pin, UART
 from rp2 import PIO, StateMachine, asm_pio
 from time import sleep, time, localtime
-import network
-import urequests as requests
 import os
 import json
-import socket
-from WIFI_CONFIG import WIFI_SSID, WIFI_PASSWORD
-from INFLUX_CONFIG import INFLUX_USERNAME, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET
-from SYSLOG_CONFIG import SYSLOG_HOST, SYSLOG_PORT
 
-# WiFi
-wlan = network.WLAN(network.STA_IF)
-wifi_post_tries = 10
+try:
+    import network
+    import urequests as requests
+    import socket
+    is_pico_w = True
+    from WIFI_CONFIG import WIFI_SSID, WIFI_PASSWORD
+    from INFLUX_CONFIG import INFLUX_USERNAME, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET
+    from SYSLOG_CONFIG import SYSLOG_HOST, SYSLOG_PORT
+    
+    # WiFi
+    wlan = network.WLAN(network.STA_IF)
+    wifi_post_tries = 10
+except:
+    is_pico_w = False
+
+debug_flag = True
 
 # OTA
 firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
-
-
-
 
 # Serial Communications
 UART_BAUD = 9600
 HARD_UART_TX_PIN = Pin(4, Pin.OUT) # pin 6
 HARD_UART_RX_PIN = Pin(5, Pin.IN, Pin.PULL_UP) # pin 7
 RUN_PIN = Pin(3, Pin.IN, Pin.PULL_UP)
+if is_pico_w == False:
+    RUN_PIN = Pin(3, Pin.IN, Pin.PULL_DOWN)
 battery_list = {
     # 'B01': Pin(8, Pin.IN, Pin.PULL_UP), # pin 11
     'B01': {'tp': 'uart'}, # pin 7
@@ -107,17 +113,6 @@ class OTAUpdater:
             # save the current version
             with open('version.json', 'w') as f:
                 json.dump({'version': self.current_version}, f)
-            
-    # def connect_wifi(self):
-    #     """ Connect to Wi-Fi."""
-
-    #     sta_if = network.WLAN(network.STA_IF)
-    #     sta_if.active(True)
-    #     sta_if.connect(self.ssid, self.password)
-    #     while not sta_if.isconnected():
-    #         logit('.', end="")
-    #         sleep(0.25)
-    #     logit(f'Connected to WiFi, IP is: {sta_if.ifconfig()[0]}')
         
     def fetch_latest_code(self)->bool:
         """ Fetch the latest code from the repo, returns False if not found."""
@@ -126,8 +121,6 @@ class OTAUpdater:
         response = requests.get(self.firmware_url)
         if response.status_code == 200:
             logit(f'Fetched latest firmware code, status: {response.status_code}')
-            #logit(f'Fetched latest firmware code, status: {response.status_code}, -  {response.text}')
-    
             # Save the fetched code to memory
             self.latest_code = response.text
             return True
@@ -153,9 +146,6 @@ class OTAUpdater:
         # free up some memory
         self.latest_code = None
 
-        # Overwrite the old code.
-#         os.rename('latest_code.py', self.filename)
-
     def update_and_reset(self):
         """ Update the code and reset the device."""
 
@@ -171,9 +161,6 @@ class OTAUpdater:
     def check_for_updates(self):
         """ Check if updates are available."""
         
-        # Connect to Wi-Fi
-        # self.connect_wifi()
-
         logit(f'Checking for latest version... on {self.version_url}')
         response = requests.get(self.version_url)
         
@@ -181,9 +168,6 @@ class OTAUpdater:
         
         logit(f"data is: {data}, url is: {self.version_url}")
         logit(f"data version is: {data['version']}")
-        # Turn list to dict using dictionary comprehension
-#         my_dict = {data[i]: data[i + 1] for i in range(0, len(data), 2)}
-        
         self.latest_version = int(data['version'])
         logit(f'latest version is: {self.latest_version}')
         
@@ -244,7 +228,6 @@ class RuipuBattery:
     elif self.tp == 'uart':
       while self.uart.any() > 0 and self.bytesRead < 36:
         b = self.uart.read(1)
-        # print(f'({self.bytesRead}) Char: {b.hex()}')
         self.buf[self.bytesRead] = b[0]
         self.bytesRead += 1
     
@@ -254,9 +237,6 @@ class RuipuBattery:
         return True # if the CRC calc matches the last byte
       else:
         logit(f"({self.name()}) Bad CRC: {bytes(self.buf).hex()}")
-        # for z in range(36):
-        #   print(f"{hex(self.buf[z])}",end="")
-        # print("")
         self.reset()
     return False
 
@@ -425,7 +405,8 @@ def core1_task(uart,battery_instance_list):
       battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
     uart.write(buf)
-    # print(".",end="")
+    if is_pico_w == False:
+        print(".",end="")
     sleep(4.9)
 
 def logit(message):
@@ -443,9 +424,8 @@ def main():
   # bad practice <sigh>
   global syslog_sock
   global wifi_post_tries
+  successful_posts = 0
 
-  
-  
   # check to make sure the RUN_PIN is low
   if RUN_PIN.value() == 1:
     print("RUN_PIN is high.  Bailing out!")
@@ -474,16 +454,16 @@ def main():
         sm_count += 1
 
     # start outputing the unlock code right away
+    # tell core 1 to reset each hard/soft UART then output the unlock key every 4.9 seconds
     _thread.start_new_thread(core1_task, (uart,battery_instance_list))
     
     # connect wifi
-    if connectWifi():
-      logit("Connected to WiFi")
-      ota_updater = OTAUpdater(firmware_url, "main.py")
-      ota_updater.download_and_install_update_if_available()
-    # tell core 1 to reset each hard/soft UART then output the unlock key every 4.9 seconds
+    if is_pico_w:
+        if connectWifi():
+          logit("Connected to WiFi")
+          ota_updater = OTAUpdater(firmware_url, "main.py")
+          ota_updater.download_and_install_update_if_available()
     
-
     last_influx_update_minute = [0] * len(battery_instance_list)
 
     while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
@@ -502,35 +482,32 @@ def main():
           if battery.isDischargeFETEnabled():
             discharge_enabled = 1
 
-          # logstring += f"({battery.name()}) "
-          # logstring += f"SOC:{state_of_charge},"
-          # logstring += f"Cycles:{cycle_count},"
-          # logstring += f"Volts:{voltage:.2f},"
-          # logstring += f"Amps:{current:.2f},"
-          # logstring += f"Power:{power:.2f},"
-          # logstring += f"Low:{cell_volts_low:.2f},"
-          # logstring += f"High:{cell_volts_high:.2f},"
-          # logstring += f"Discharge_Enabled:{discharge_enabled}"
-          # print(logstring,end="")
+          if debug_flag == True:
+            logstring += f"({battery.name()}) "
+            logstring += f"SOC:{state_of_charge},"
+            logstring += f"Cycles:{cycle_count},"
+            logstring += f"Volts:{voltage:.2f},"
+            logstring += f"Amps:{current:.2f},"
+            logstring += f"Power:{power:.2f},"
+            logstring += f"Low:{cell_volts_low:.2f},"
+            logstring += f"High:{cell_volts_high:.2f},"
+            logstring += f"Discharge_Enabled:{discharge_enabled}"
           
           minute = localtime()[4]
           if minute != last_influx_update_minute[n]: # post to influx once per minute
             name = battery.name()
             work_string= f'es200_battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
-            # print(f"{work_string}")
             influx_string += work_string
             last_influx_update_minute[n] = minute
-      # if len(logstring) > 0:
-      #   # print(logstring)
-      #   # if syslog_sock is not None:
-      #   #   syslog_sock.sendto(logstring.encode(), (SYSLOG_HOST,SYSLOG_PORT))
-      #   logit(logstring)
-      if len(influx_string) > 0:
-        
+      if len(logstring) > 0:
+        logit(logstring)
+      if len(influx_string) > 0:  
         try:
-          # print(f'Posting data\n{influx_string}',end="")
+          if debug_flag == True:
+            logit(f'Posting data\n{influx_string}',end="")
           if postToInflux(influx_string) == True:
-            logit("Posting data Success")
+            successful_posts = successful_posts + 1
+            logit(f"Post #{successful_posts} to influxdb Successfull")
             wifi_post_tries = 10
           else:
             wifi_post_tries = wifi_post_tries - 1
