@@ -84,11 +84,8 @@ def handler(sm):
 
 class OTAUpdater:
     """ This class handles OTA updates. It connects to the Wi-Fi, checks for updates, downloads and installs them."""
-    # def __init__(self, ssid, password, repo_url, filename):
     def __init__(self, repo_url, filename):
         self.filename = filename
-        # self.ssid = ssid
-        # self.password = password
         self.repo_url = repo_url
         if "www.github.com" in self.repo_url :
             logit(f"Updating {repo_url} to raw.githubusercontent")
@@ -436,7 +433,6 @@ def restart_pico():
 
 def main():
   # bad practice <sigh>
-  global syslog_sock
   global wifi_post_tries
   successful_posts = 0
 
@@ -517,13 +513,13 @@ def main():
               logit(f"Posting data failed. {wifi_post_tries} tries left. Pausing 15 seconds.")
               if wifi_post_tries < 1:
                 restart_pico()
-              sleep(15)
+              sleep(5)
           except:
             wifi_post_tries = wifi_post_tries - 1
             logit(f"Posting data Failed via exception. {wifi_post_tries} tries left. Pausing 15 seconds.")
             if wifi_post_tries < 1:
                 restart_pico()
-            sleep(15)
+            sleep(5)
 
 if __name__ == '__main__':
   main()
