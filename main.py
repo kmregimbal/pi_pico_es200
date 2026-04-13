@@ -11,9 +11,7 @@ try:
     import urequests as requests
     import socket
     is_pico_w = True
-    from WIFI_CONFIG import WIFI_SSID, WIFI_PASSWORD
-    from INFLUX_CONFIG import INFLUX_USERNAME, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET
-    from SYSLOG_CONFIG import SYSLOG_HOST, SYSLOG_PORT
+    from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_CONFIG, SYSLOG_HOST, SYSLOG_PORT
     
     # WiFi
     wlan = network.WLAN(network.STA_IF)
@@ -335,6 +333,22 @@ class RuipuBattery:
           crc ^= 0x8C
         extract >>= 1
     return hex(crc)
+  
+  def influx_string(self):
+    if self.read():
+      power = self.voltage() * self.current()
+      discharge_enabled = 0
+      if self.isDischargeFETEnabled():
+        discharge_enabled = 1
+      influx_string = f"es200_battery_data,unit={self.name()} "
+      influx_string += f"soc={self.soc()}i,cycles={self.chargeCycleCount()}i,volts={self.voltage():.3f},amps={self.current():.3f},power={power:.3f},high={self.high():.3f},low={self.low():.3f},discharge={discharge_enabled}i\n"
+      if debug_flag == True:
+        print(influx_string)
+      return self.influx_string
+    else:
+      return None
+          
+          
 
 def connectWifi():
   global syslog_sock
@@ -464,63 +478,52 @@ def main():
           ota_updater = OTAUpdater(firmware_url, "main.py")
           ota_updater.download_and_install_update_if_available()
     
-    last_influx_update_minute = [0] * len(battery_instance_list)
+    # last_influx_update_minute = [0] * len(battery_instance_list)
+    influx_strings = [''] * len(battery_instance_list)
 
+    minute = last_minute = 0
     while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
-      influx_string = logstring = ""
+      # influx_string = logstring = ""
       # logstring = ""
       for n, battery in enumerate(battery_instance_list):
-        if battery.read():
-          state_of_charge = battery.soc()
-          cycle_count = battery.chargeCycleCount()
-          voltage = battery.voltage()
-          current = battery.current()
-          power = voltage * current
-          cell_volts_high = battery.high()
-          cell_volts_low = battery.low()
-          discharge_enabled = 0
-          if battery.isDischargeFETEnabled():
-            discharge_enabled = 1
+        influx_string = battery.influx_string()
+        if influx_string is not None:
+          influx_strings[n] = influx_string
 
-          if debug_flag == True:
-            logstring += f"({battery.name()}) "
-            logstring += f"SOC:{state_of_charge},"
-            logstring += f"Cycles:{cycle_count},"
-            logstring += f"Volts:{voltage:.2f},"
-            logstring += f"Amps:{current:.2f},"
-            logstring += f"Power:{power:.2f},"
-            logstring += f"Low:{cell_volts_low:.2f},"
-            logstring += f"High:{cell_volts_high:.2f},"
-            logstring += f"Discharge_Enabled:{discharge_enabled}"
+        
           
-          minute = localtime()[4]
-          if minute != last_influx_update_minute[n]: # post to influx once per minute
-            name = battery.name()
-            work_string= f'es200_battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
+#          minute = localtime()[4]
+#          if minute != last_influx_update_minute[n]: # post to influx once per minute
+#            name = battery.name()
+#            work_string= f'es200_battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
+#            influx_string += work_string
+#            last_influx_update_minute[n] = minute
+      minute = localtime()[4]
+      if minute != last_minute:
+        influx_string = ""
+        for work_string in influx_strings:
+          if work_string is not None:
             influx_string += work_string
-            last_influx_update_minute[n] = minute
-      if len(logstring) > 0:
-        logit(logstring)
-      if len(influx_string) > 0:  
-        try:
-          if debug_flag == True:
-            logit(f'Posting data\n{influx_string}',end="")
-          if postToInflux(influx_string) == True:
-            successful_posts = successful_posts + 1
-            logit(f"Post #{successful_posts} to influxdb Successfull")
-            wifi_post_tries = 10
-          else:
+        if is_pico_w:
+          try:
+            if debug_flag == True:
+              logit(f'Posting data\n{influx_string}',end="")
+            if postToInflux(influx_string) == True:
+              successful_posts = successful_posts + 1
+              logit(f"Post #{successful_posts} to influxdb Successfull")
+              wifi_post_tries = 10
+            else:
+              wifi_post_tries = wifi_post_tries - 1
+              logit(f"Posting data failed. {wifi_post_tries} tries left. Pausing 15 seconds.")
+              if wifi_post_tries < 1:
+                restart_pico()
+              sleep(15)
+          except:
             wifi_post_tries = wifi_post_tries - 1
-            logit(f"Posting data failed. {wifi_post_tries} tries left. Pausing 15 seconds.")
+            logit(f"Posting data Failed via exception. {wifi_post_tries} tries left. Pausing 15 seconds.")
             if wifi_post_tries < 1:
-              restart_pico()
+                restart_pico()
             sleep(15)
-        except:
-          wifi_post_tries = wifi_post_tries - 1
-          logit(f"Posting data Failed via exception. {wifi_post_tries} tries left. Pausing 15 seconds.")
-          if wifi_post_tries < 1:
-              restart_pico()
-          sleep(15)
 
 if __name__ == '__main__':
   main()
