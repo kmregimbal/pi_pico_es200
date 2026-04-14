@@ -20,7 +20,7 @@ except Exception as e:
 
 debug_flag = True
 no_battery = True
-# ntp_time_synced = False
+ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 
 # OTA
@@ -236,6 +236,7 @@ class RuipuBattery:
 
   def setbuf(self,inbuf): # for library debugging
     self.buf = inbuf
+    self.buf_set_for_debug = True
 
   def maxTemp(self):
     maxTemp = 0
@@ -331,35 +332,36 @@ class RuipuBattery:
     return hex(crc)
   
   def influx_string(self):
-    # if self.read():
-    power = self.voltage() * self.current()
-    discharge_enabled = 0
-    
-    if self.isDischargeFETEnabled():
-      discharge_enabled = 1
-    influx_string = f"es200_battery_data,unit={self.name()} "
-    influx_string += f"soc={self.soc()}i,"
-    influx_string += f"cycles={self.chargeCycleCount()}i,"
-    influx_string += f"volts={self.voltage():.3f},"
-    influx_string += f"amps={self.current():.3f},"
-    influx_string += f"power={power:.3f},"
-    influx_string += f"high={self.high():.3f},"
-    influx_string += f"low={self.low():.3f},"
-    influx_string += f"discharge={discharge_enabled}i"
-    # if ntp_time_synced == True:
-    #   nano_time = time_ns() # influx expects nanoseconds since UNIX epoch
-    #   influx_string += f" {nano_time}"
-    influx_string += "\n"
-    # if debug_flag == True:
-    #   print(influx_string)
-    return influx_string
-    # else:
-    #   return None
+    if self.read() or self.buf_set_for_debug == True:
+      power = self.voltage() * self.current()
+      discharge_enabled = 0
+      
+      if self.isDischargeFETEnabled():
+        discharge_enabled = 1
+      influx_string = f"es200_battery_data,unit={self.name()} "
+      influx_string += f"soc={self.soc()}i,"
+      influx_string += f"cycles={self.chargeCycleCount()}i,"
+      influx_string += f"volts={self.voltage():.3f},"
+      influx_string += f"amps={self.current():.3f},"
+      influx_string += f"power={power:.3f},"
+      influx_string += f"high={self.high():.3f},"
+      influx_string += f"low={self.low():.3f},"
+      influx_string += f"discharge={discharge_enabled}i"
+      # if ntp_time_synced == True:
+      #   nano_time = time_ns() # influx expects nanoseconds since UNIX epoch
+      #   influx_string += f" {nano_time}"
+      influx_string += "\n"
+      # if debug_flag == True:
+      #   print(influx_string)
+      self.buf_set_for_debug = False
+      return influx_string
+    else:
+      return None
           
           
 
 def connectWifi():
-  # global ntp_time_synced
+  global ntp_time_synced
   global syslog_sock
 
   # clean up any outstanding connections
@@ -396,13 +398,12 @@ def connectWifi():
     print('ip = ' + status[0])
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
-    # try:
-    #     settime()
-    #     ntp_time_synced = True
-    #     logit(f"Time Synced")
-    #     logit(localtime())
-    # except exception as e:
-    #     logit(f"Time Sync failed: {e}")
+    try:
+        settime()
+        ntp_time_synced = True
+        logit(f"Time Synced")
+    except exception as e:
+        logit(f"Time Sync failed: {e}")
     
     return True
 
@@ -497,6 +498,7 @@ def main():
     influx_strings = [''] * len(battery_instance_list)
 
     minute = last_minute = 0
+    target_time = time() + 30
     while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
       # influx_string = logstring = ""
       # logstring = ""
@@ -512,8 +514,14 @@ def main():
 
       minute = localtime()[4]
       if minute != last_minute:
-        influx_string = ""
+        target_time = time() + 30
         last_minute = minute
+        # print(f"Time Now: {localtime()}")
+        # print(f"Target time: {localtime(target_time)}")
+      if time() > target_time:
+        target_time = time() + 60
+        influx_string = ""
+        
         for work_string in influx_strings:
           if work_string is not None:
             influx_string += work_string
