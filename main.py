@@ -19,7 +19,7 @@ except Exception as e:
     is_pico_w = False
 
 debug_flag = True
-no_battery = True
+no_battery = False
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 
@@ -39,10 +39,10 @@ battery_list = {
     'B02': {'pin': Pin(9, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
     'B03': {'pin': Pin(12, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 16
     'B04': {'pin': Pin(13, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 17
-    'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
-    'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
-    'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
-    'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
+    #'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
+    #'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
+    #'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
+    #'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
   }
 
 # PIO program for UART
@@ -190,6 +190,7 @@ class RuipuBattery:
     self.bytesRead = 0
     self.buf = bytearray(36)
     self.pack_name = name
+    self.buf_set_for_debug = False
 
   # def unlock(self):
   #   self.reset() # clear any lingering data in input buffer
@@ -333,6 +334,7 @@ class RuipuBattery:
   
   def influx_string(self):
     if self.read() or self.buf_set_for_debug == True:
+      self.update_time_target = time() + 55
       power = self.voltage() * self.current()
       discharge_enabled = 0
       
@@ -352,7 +354,7 @@ class RuipuBattery:
       #   influx_string += f" {nano_time}"
       influx_string += "\n"
       # if debug_flag == True:
-      #   print(influx_string)
+      # print(influx_string)
       self.buf_set_for_debug = False
       return influx_string
     else:
@@ -433,12 +435,12 @@ def postToInflux(data):
 def core1_task(uart,battery_instance_list):
   while RUN_PIN.value() == 0:
     for battery in battery_instance_list:
-      battery.reset()
+     battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
     uart.write(buf)
     if is_pico_w == False:
         print(".",end="")
-    sleep(3.0)
+    sleep(4.9)
 
 def logit(message):
   print(message)
@@ -499,25 +501,28 @@ def main():
 
     minute = last_minute = 0
     target_time = time() + 30
+    loop_offset = 0
     while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
-      # influx_string = logstring = ""
-      # logstring = ""
+      log_string = ""
       for n, battery in enumerate(battery_instance_list):
+
         if no_battery == True:
           # data = bytearray.fromhex('3A1620020064641D1C1C1C1301000F0000000020008EA10000000000002F101F10522C2E')
-
           data = bytearray.fromhex('3A1620020064641E1E1E1F1901000F0000000020001CA30000270400005C104010522C0A')
           battery.setbuf(data)
         influx_string = battery.influx_string()
         if influx_string is not None:
           influx_strings[n] = influx_string
+          log_string += f"({battery.name()}) "
 
-      minute = localtime()[4]
-      if minute != last_minute:
-        target_time = time() + 30
-        last_minute = minute
-        # print(f"Time Now: {localtime()}")
-        # print(f"Target time: {localtime(target_time)}")
+      # minute = localtime()[4]
+      # if minute != last_minute:
+      #   target_time = time() + 30
+      #   last_minute = minute
+      #   # print(f"Time Now: {localtime()}")
+      #   # print(f"Target time: {localtime(target_time)}")
+      if len(log_string) > 0:
+          print(log_string)
       if time() > target_time:
         target_time = time() + 60
         influx_string = ""
