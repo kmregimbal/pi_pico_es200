@@ -2,7 +2,8 @@ import struct
 import _thread
 from machine import Pin, UART
 from rp2 import PIO, StateMachine, asm_pio
-from time import sleep, time, localtime
+from time import sleep, time, localtime, time_ns
+from ntptime import settime
 import os
 import json
 
@@ -10,16 +11,17 @@ try:
     import network
     import urequests as requests
     import socket
-    is_pico_w = True
-    from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_CONFIG, SYSLOG_HOST, SYSLOG_PORT
-    
-    # WiFi
-    wlan = network.WLAN(network.STA_IF)
+    from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
+    wlan = network.WLAN(network.STA_IF)  # WiFi
     wifi_post_tries = 10
-except:
+    is_pico_w = True
+except Exception as e:
     is_pico_w = False
 
 debug_flag = True
+no_battery = True
+# ntp_time_synced = False
+syslog_sock = None  # syslog via UDP
 
 # OTA
 firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
@@ -42,9 +44,6 @@ battery_list = {
     'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
     'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
   }
-
-# syslog via UDP
-syslog_sock = None
 
 # PIO program for UART
 @asm_pio(
@@ -332,22 +331,35 @@ class RuipuBattery:
     return hex(crc)
   
   def influx_string(self):
-    if self.read():
-      power = self.voltage() * self.current()
-      discharge_enabled = 0
-      if self.isDischargeFETEnabled():
-        discharge_enabled = 1
-      influx_string = f"es200_battery_data,unit={self.name()} "
-      influx_string += f"soc={self.soc()}i,cycles={self.chargeCycleCount()}i,volts={self.voltage():.3f},amps={self.current():.3f},power={power:.3f},high={self.high():.3f},low={self.low():.3f},discharge={discharge_enabled}i\n"
-      if debug_flag == True:
-        print(influx_string)
-      return self.influx_string
-    else:
-      return None
+    # if self.read():
+    power = self.voltage() * self.current()
+    discharge_enabled = 0
+    
+    if self.isDischargeFETEnabled():
+      discharge_enabled = 1
+    influx_string = f"es200_battery_data,unit={self.name()} "
+    influx_string += f"soc={self.soc()}i,"
+    influx_string += f"cycles={self.chargeCycleCount()}i,"
+    influx_string += f"volts={self.voltage():.3f},"
+    influx_string += f"amps={self.current():.3f},"
+    influx_string += f"power={power:.3f},"
+    influx_string += f"high={self.high():.3f},"
+    influx_string += f"low={self.low():.3f},"
+    influx_string += f"discharge={discharge_enabled}i"
+    # if ntp_time_synced == True:
+    #   nano_time = time_ns() # influx expects nanoseconds since UNIX epoch
+    #   influx_string += f" {nano_time}"
+    influx_string += "\n"
+    # if debug_flag == True:
+    #   print(influx_string)
+    return influx_string
+    # else:
+    #   return None
           
           
 
 def connectWifi():
+  # global ntp_time_synced
   global syslog_sock
 
   # clean up any outstanding connections
@@ -384,6 +396,13 @@ def connectWifi():
     print('ip = ' + status[0])
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
+    # try:
+    #     settime()
+    #     ntp_time_synced = True
+    #     logit(f"Time Synced")
+    #     logit(localtime())
+    # except exception as e:
+    #     logit(f"Time Sync failed: {e}")
     
     return True
 
@@ -395,7 +414,7 @@ def postToInflux(data):
     print("ReConnecting to wifi...")
     connectWifi()
 
-  url = f"http://192.168.1.70:8086/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}"
+  url = f"http://{INFLUX_HOST}:8086/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}"
   headers = {
       "Authorization": f"Token {INFLUX_TOKEN}",
       "Content-Type": "text/plain; charset=utf-8",
@@ -418,7 +437,7 @@ def core1_task(uart,battery_instance_list):
     uart.write(buf)
     if is_pico_w == False:
         print(".",end="")
-    sleep(4.9)
+    sleep(3.0)
 
 def logit(message):
   print(message)
@@ -482,44 +501,40 @@ def main():
       # influx_string = logstring = ""
       # logstring = ""
       for n, battery in enumerate(battery_instance_list):
+        if no_battery == True:
+          # data = bytearray.fromhex('3A1620020064641D1C1C1C1301000F0000000020008EA10000000000002F101F10522C2E')
+
+          data = bytearray.fromhex('3A1620020064641E1E1E1F1901000F0000000020001CA30000270400005C104010522C0A')
+          battery.setbuf(data)
         influx_string = battery.influx_string()
         if influx_string is not None:
           influx_strings[n] = influx_string
 
-        
-          
-#          minute = localtime()[4]
-#          if minute != last_influx_update_minute[n]: # post to influx once per minute
-#            name = battery.name()
-#            work_string= f'es200_battery_data,unit={name} soc={state_of_charge}i,cycles={cycle_count}i,volts={voltage:.3f},amps={current:.3f},power={power:.3f},high={cell_volts_high:.3f},low={cell_volts_low:.3f},discharge={discharge_enabled}i\n'
-#            influx_string += work_string
-#            last_influx_update_minute[n] = minute
       minute = localtime()[4]
       if minute != last_minute:
         influx_string = ""
+        last_minute = minute
         for work_string in influx_strings:
           if work_string is not None:
             influx_string += work_string
+        if debug_flag == True:
+          logit(f'Posting data\n{influx_string}')
         if is_pico_w:
           try:
-            if debug_flag == True:
-              logit(f'Posting data\n{influx_string}',end="")
             if postToInflux(influx_string) == True:
               successful_posts = successful_posts + 1
               logit(f"Post #{successful_posts} to influxdb Successfull")
               wifi_post_tries = 10
             else:
-              wifi_post_tries = wifi_post_tries - 1
-              logit(f"Posting data failed. {wifi_post_tries} tries left. Pausing 15 seconds.")
+              wifi_post_tries -= 1
+              logit(f"Posting data failed. {wifi_post_tries} tries left.")
               if wifi_post_tries < 1:
                 restart_pico()
-              sleep(5)
-          except:
-            wifi_post_tries = wifi_post_tries - 1
-            logit(f"Posting data Failed via exception. {wifi_post_tries} tries left. Pausing 15 seconds.")
+          except Exception as e:
+            wifi_post_tries -= 1
+            logit(f"Posting data Failed via exception [{e}]. {wifi_post_tries} tries left.")
             if wifi_post_tries < 1:
                 restart_pico()
-            sleep(5)
 
 if __name__ == '__main__':
   main()
