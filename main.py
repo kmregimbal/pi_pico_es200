@@ -19,7 +19,7 @@ except Exception as e:
     is_pico_w = False
 
 debug_flag = True
-no_battery = False
+no_battery = True
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 
@@ -39,10 +39,10 @@ battery_list = {
     'B02': {'pin': Pin(9, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
     'B03': {'pin': Pin(12, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 16
     'B04': {'pin': Pin(13, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 17
-    #'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
-    #'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
-    #'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
-    #'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
+    'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
+    'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
+    'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
+    'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
   }
 
 # PIO program for UART
@@ -334,7 +334,6 @@ class RuipuBattery:
   
   def influx_string(self):
     if self.read() or self.buf_set_for_debug == True:
-      self.update_time_target = time() + 55
       power = self.voltage() * self.current()
       discharge_enabled = 0
       
@@ -355,7 +354,9 @@ class RuipuBattery:
       influx_string += "\n"
       # if debug_flag == True:
       # print(influx_string)
-      self.buf_set_for_debug = False
+      if self.buf_set_for_debug == True:
+        sleep(0.0375) # simulate time to read the chars
+        self.buf_set_for_debug = False
       return influx_string
     else:
       return None
@@ -470,6 +471,8 @@ def main():
     # set up the instances pointing to the hard and PIO UARTS
     sm_count = 0 # 1 of the state machines on PIO1 (sm 4-7) is used by wifi
     for battery in battery_list:
+      if sm_count == 4:
+        sm_count += 1 # skip SM0 on PIO1
       if battery_list[battery]['tp'] == 'uart':
         battery_instance_list.append(RuipuBattery(tp='uart', uart=uart, name=battery))
       elif battery_list[battery]['tp'] == 'sm':
@@ -515,6 +518,8 @@ def main():
           influx_strings[n] = influx_string
           log_string += f"({battery.name()}) "
 
+      if no_battery == True:
+        sleep(4.9) # simulate time just waiting for next text to start appearing on UARTS
       # minute = localtime()[4]
       # if minute != last_minute:
       #   target_time = time() + 30
