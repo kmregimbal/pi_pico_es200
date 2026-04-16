@@ -8,22 +8,23 @@ import os
 import json
 
 try:
-    import network
-    import urequests as requests
-    import socket
-    from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
-    wlan = network.WLAN(network.STA_IF)  # WiFi
-    
-    is_pico_w = True
+  import network
+  import urequests as requests
+  import socket
+  from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
+  wlan = network.WLAN(network.STA_IF)  # WiFi
+  
+  is_pico_w = True
 except Exception as e:
-    is_pico_w = False
+  is_pico_w = False
 
 debug_flag = True
-no_battery = True
+no_battery = False
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 WIFI_POST_TRIES = 10
 wifi_post_tries_left = WIFI_POST_TRIES
+UNLOCK_CODE_WAIT = 4.9
 
 # OTA
 firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
@@ -33,154 +34,158 @@ UART_BAUD = 9600
 HARD_UART_TX_PIN = Pin(4, Pin.OUT) # pin 6
 HARD_UART_RX_PIN = Pin(5, Pin.IN, Pin.PULL_UP) # pin 7
 RUN_PIN = Pin(3, Pin.IN, Pin.PULL_UP)
-if is_pico_w == False:
-    RUN_PIN = Pin(3, Pin.IN, Pin.PULL_DOWN)
+NO_BATT_PIN = Pin(11,Pin.IN, Pin.PULL_UP) # indicate no batteries will communicate.
+if is_pico_w == False: # so we can run on normal pi pico
+  RUN_PIN = Pin(3, Pin.IN, Pin.PULL_DOWN)
+if NO_BATT_PIN.value() == 0: # short to ground to use fake data
+  print("Fake data will be used since no batteries are available")
+  no_battery = True
 battery_list = {
-    # 'B01': Pin(8, Pin.IN, Pin.PULL_UP), # pin 11
-    'B01': {'tp': 'uart'}, # pin 7
-    'B02': {'pin': Pin(9, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
-    'B03': {'pin': Pin(12, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 16
-    'B04': {'pin': Pin(13, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 17
-    'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
-    'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
-    'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
-    'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
+  # 'B01': Pin(8, Pin.IN, Pin.PULL_UP), # pin 11
+  'B01': {'tp': 'uart'}, # pin 7
+  'B02': {'pin': Pin(9, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
+  'B03': {'pin': Pin(12, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 16
+  'B04': {'pin': Pin(13, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 17
+  'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
+  'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
+  'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
+  'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
   }
 
 # PIO program for UART
 @asm_pio(
-    in_shiftdir=PIO.SHIFT_RIGHT,
-    fifo_join=PIO.JOIN_RX,
+  in_shiftdir=PIO.SHIFT_RIGHT,
+  fifo_join=PIO.JOIN_RX,
 )
 def uart_rx():
-    # fmt: off
-    label("start")
-    # Stall until start bit is asserted
-    wait(0, pin, 0)
-    # Preload bit counter, then delay until halfway through
-    # the first data bit (12 cycles incl wait, set).
-    set(x, 7)                 [10]
-    label("bitloop")
-    # Shift data bit into ISR
-    in_(pins, 1)
-    # Loop 8 times, each loop iteration is 8 cycles
-    jmp(x_dec, "bitloop")     [6]
-    # Check stop bit (should be high)
-    jmp(pin, "good_stop")
-    # Either a framing error or a break. Set a sticky flag
-    # and wait for line to return to idle state.
-    irq(block, 4)
-    wait(1, pin, 0)
-    # Don't push data if we didn't see good framing.
-    jmp("start")
-    # No delay before returning to start; a little slack is
-    # important in case the TX clock is slightly too fast.
-    label("good_stop")
-    push(block)
-    # fmt: on
+  # fmt: off
+  label("start")
+  # Stall until start bit is asserted
+  wait(0, pin, 0)
+  # Preload bit counter, then delay until halfway through
+  # the first data bit (12 cycles incl wait, set).
+  set(x, 7)                 [10]
+  label("bitloop")
+  # Shift data bit into ISR
+  in_(pins, 1)
+  # Loop 8 times, each loop iteration is 8 cycles
+  jmp(x_dec, "bitloop")     [6]
+  # Check stop bit (should be high)
+  jmp(pin, "good_stop")
+  # Either a framing error or a break. Set a sticky flag
+  # and wait for line to return to idle state.
+  irq(block, 4)
+  wait(1, pin, 0)
+  # Don't push data if we didn't see good framing.
+  jmp("start")
+  # No delay before returning to start; a little slack is
+  # important in case the TX clock is slightly too fast.
+  label("good_stop")
+  push(block)
+  # fmt: on
 
 # The handler for a UART break detected by the PIO.
 def handler(sm):
-    print("break", time.ticks_ms(), end=" ")
+  print("break", time.ticks_ms(), end=" ")
 
 class OTAUpdater:
-    """ This class handles OTA updates. It connects to the Wi-Fi, checks for updates, downloads and installs them."""
-    def __init__(self, repo_url, filename):
-        self.filename = filename
-        self.repo_url = repo_url
-        if "www.github.com" in self.repo_url :
-            logit(f"Updating {repo_url} to raw.githubusercontent")
-            self.repo_url = self.repo_url.replace("www.github","raw.githubusercontent")
-        elif "github.com" in self.repo_url:
-            logit(f"Updating {repo_url} to raw.githubusercontent'")
-            self.repo_url = self.repo_url.replace("github","raw.githubusercontent")            
-        self.version_url = self.repo_url + 'main/version.json'
-        logit(f"version url is: {self.version_url}")
-        self.firmware_url = self.repo_url + 'main/' + filename
+  """ This class handles OTA updates. It connects to the Wi-Fi, checks for updates, downloads and installs them."""
+  def __init__(self, repo_url, filename):
+    self.filename = filename
+    self.repo_url = repo_url
+    if "www.github.com" in self.repo_url :
+      logit(f"Updating {repo_url} to raw.githubusercontent")
+      self.repo_url = self.repo_url.replace("www.github","raw.githubusercontent")
+    elif "github.com" in self.repo_url:
+      logit(f"Updating {repo_url} to raw.githubusercontent'")
+      self.repo_url = self.repo_url.replace("github","raw.githubusercontent")            
+    self.version_url = self.repo_url + 'main/version.json'
+    logit(f"version url is: {self.version_url}")
+    self.firmware_url = self.repo_url + 'main/' + filename
 
-        # get the current version (stored in version.json)
-        if 'version.json' in os.listdir():    
-            with open('version.json') as f:
-                self.current_version = int(json.load(f)['version'])
-            logit(f"Current device firmware version is '{self.current_version}'")
+    # get the current version (stored in version.json)
+    if 'version.json' in os.listdir():    
+      with open('version.json') as f:
+        self.current_version = int(json.load(f)['version'])
+      logit(f"Current device firmware version is '{self.current_version}'")
 
-        else:
-            self.current_version = 0
-            # save the current version
-            with open('version.json', 'w') as f:
-                json.dump({'version': self.current_version}, f)
-        
-    def fetch_latest_code(self)->bool:
-        """ Fetch the latest code from the repo, returns False if not found."""
-        
-        # Fetch the latest code from the repo.
-        response = requests.get(self.firmware_url)
-        if response.status_code == 200:
-            logit(f'Fetched latest firmware code, status: {response.status_code}')
-            # Save the fetched code to memory
-            self.latest_code = response.text
-            return True
-        
-        elif response.status_code == 404:
-            logit(f'Firmware not found - {self.firmware_url}.')
-            return False
-
-    def update_no_reset(self):
-        """ Update the code without resetting the device."""
-
-        # Save the fetched code and update the version file to latest version.
-        with open('latest_code.py', 'w') as f:
-            f.write(self.latest_code)
-        
-        # update the version in memory
-        self.current_version = self.latest_version
-
-        # save the current version
-        with open('version.json', 'w') as f:
-            json.dump({'version': self.current_version}, f)
-        
-        # free up some memory
-        self.latest_code = None
-
-    def update_and_reset(self):
-        """ Update the code and reset the device."""
-
-        logit(f"Updating device... (Renaming latest_code.py to {self.filename})")
-
-        # Overwrite the old code.
-        os.rename('latest_code.py', self.filename)  
-
-        # Restart the device to run the new code.
-        logit('Restarting device...')
-        machine.reset()  # Reset the device to run the new code.
-        
-    def check_for_updates(self):
-        """ Check if updates are available."""
-        
-        logit(f'Checking for latest version... on {self.version_url}')
-        response = requests.get(self.version_url)
-        
-        data = json.loads(response.text)
-        
-        logit(f"data is: {data}, url is: {self.version_url}")
-        logit(f"data version is: {data['version']}")
-        self.latest_version = int(data['version'])
-        logit(f'latest version is: {self.latest_version}')
-        
-        # compare versions
-        newer_version_available = True if self.current_version < self.latest_version else False
-        
-        logit(f'Newer version available: {newer_version_available}')    
-        return newer_version_available
+    else:
+      self.current_version = 0
+      # save the current version
+      with open('version.json', 'w') as f:
+        json.dump({'version': self.current_version}, f)
+      
+  def fetch_latest_code(self)->bool:
+    """ Fetch the latest code from the repo, returns False if not found."""
     
-    def download_and_install_update_if_available(self):
-        """ Check for updates, download and install them."""
-        if self.check_for_updates():
-            if self.fetch_latest_code():
-                self.update_no_reset() 
-                self.update_and_reset() 
-        else:
-            logit('No new updates available.')
+    # Fetch the latest code from the repo.
+    response = requests.get(self.firmware_url)
+    if response.status_code == 200:
+      logit(f'Fetched latest firmware code, status: {response.status_code}')
+      # Save the fetched code to memory
+      self.latest_code = response.text
+      return True
+    
+    elif response.status_code == 404:
+      logit(f'Firmware not found - {self.firmware_url}.')
+      return False
+
+  def update_no_reset(self):
+    """ Update the code without resetting the device."""
+
+    # Save the fetched code and update the version file to latest version.
+    with open('latest_code.py', 'w') as f:
+      f.write(self.latest_code)
+    
+    # update the version in memory
+    self.current_version = self.latest_version
+
+    # save the current version
+    with open('version.json', 'w') as f:
+      json.dump({'version': self.current_version}, f)
+    
+    # free up some memory
+    self.latest_code = None
+
+  def update_and_reset(self):
+    """ Update the code and reset the device."""
+
+    logit(f"Updating device... (Renaming latest_code.py to {self.filename})")
+
+    # Overwrite the old code.
+    os.rename('latest_code.py', self.filename)  
+
+    # Restart the device to run the new code.
+    logit('Restarting device...')
+    machine.reset()  # Reset the device to run the new code.
+      
+  def check_for_updates(self):
+    """ Check if updates are available."""
+    
+    logit(f'Checking for latest version... on {self.version_url}')
+    response = requests.get(self.version_url)
+    
+    data = json.loads(response.text)
+    
+    logit(f"data is: {data}, url is: {self.version_url}")
+    logit(f"data version is: {data['version']}")
+    self.latest_version = int(data['version'])
+    logit(f'latest version is: {self.latest_version}')
+    
+    # compare versions
+    newer_version_available = True if self.current_version < self.latest_version else False
+    
+    logit(f'Newer version available: {newer_version_available}')    
+    return newer_version_available
+  
+  def download_and_install_update_if_available(self):
+    """ Check for updates, download and install them."""
+    if self.check_for_updates():
+      if self.fetch_latest_code():
+        self.update_no_reset() 
+        self.update_and_reset() 
+    else:
+      logit('No new updates available.')
 
 
 class RuipuBattery:
@@ -411,15 +416,17 @@ def connectWifi():
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
     try:
-        settime()
-        ntp_time_synced = True
-        logit(f"Time Synced")
-    except exception as e:
-        logit(f"Time Sync failed: {e}")
+      settime()
+      ntp_time_synced = True
+      logit(f"Time Synced")
+    except Exception as e:
+      logit(f"Time Sync failed: {e}")
     
     return True
 
 def postToInflux(data):
+  """ Post influx line format data to influxdb server"""
+
   # connect to wifi if needed
   if wlan.isconnected():
     pass
@@ -435,14 +442,15 @@ def postToInflux(data):
   }
   response = requests.post(url, headers=headers, data=data, timeout=5)
   response_code = response.status_code
-  if response_code != 204:
-    logit(f"Response code was: {response_code}")
   response.close()
-  if response_code == 204:
-    return True
-  return False
+  if response_code != 204:  
+    logit(f"Response code was: {response_code}")
+    return False
+  return True
+ 
 
 def core1_task(uart,battery_instance_list):
+  """ This loop sends unlock code every """
   while RUN_PIN.value() == 0:
     for battery in battery_instance_list:
      battery.reset()
@@ -450,7 +458,7 @@ def core1_task(uart,battery_instance_list):
     uart.write(buf)
     if is_pico_w == False:
         print(".",end="")
-    sleep(4.9)
+    sleep(UNLOCK_CODE_WAIT)
 
 def logit(message):
   print(message)
@@ -481,10 +489,10 @@ def main():
     battery_instance_list = []
 
     # set up the instances pointing to the hard and PIO UARTS
-    sm_count = 0 # 1 of the state machines on PIO1 (sm 4-7) is used by wifi
+    sm_count = 0 
     for battery in battery_list:
       if sm_count == 4:
-        sm_count += 1 # skip SM0 on PIO1
+        sm_count += 1 # skip SM0 on PIO1 since is used by wifi
       if battery_list[battery]['tp'] == 'uart':
         battery_instance_list.append(RuipuBattery(tp='uart', uart=uart, name=battery))
       elif battery_list[battery]['tp'] == 'sm':
@@ -501,15 +509,15 @@ def main():
         sm_count += 1
 
     # start outputing the unlock code right away
-    # tell core 1 to reset each hard/soft UART then output the unlock key every 4.9 seconds
+    # tell core 1 to reset each hard/soft UART then output the unlock key every UNLOCK_CODE_WAIT seconds
     _thread.start_new_thread(core1_task, (uart,battery_instance_list))
     
     # connect wifi
     if is_pico_w:
-        if connectWifi():
-          logit("Connected to WiFi")
-          ota_updater = OTAUpdater(firmware_url, "main.py")
-          ota_updater.download_and_install_update_if_available()
+      if connectWifi():
+        logit("Connected to WiFi")
+        ota_updater = OTAUpdater(firmware_url, "main.py")
+        ota_updater.download_and_install_update_if_available()
     
     influx_strings = [''] * len(battery_instance_list)
 
@@ -532,7 +540,7 @@ def main():
           log_string += f"({battery.name()}) "
 
       if no_battery == True:
-        sleep(4.9) # simulate time just waiting for next text to start appearing on UARTS
+        sleep(UNLOCK_CODE_WAIT) # simulate time just waiting for next text to start appearing on UARTS
       
       minute = localtime()[4]
       if minute != last_minute:
@@ -540,7 +548,7 @@ def main():
         last_minute = minute
       
       if len(log_string) > 0:
-          logit(log_string)
+        logit(log_string)
       
       if time() > target_time:
         target_time = time() + 60
