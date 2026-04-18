@@ -1,11 +1,13 @@
 import struct
 import _thread
 from machine import Pin, UART
-from rp2 import PIO, StateMachine, asm_pio
+from rp2 import PIO, StateMachine, asm_pio, DMA
 from time import sleep, time, localtime, mktime
 from ntptime import settime
+from array import array
 import os
 import json
+from sys import exit
 
 try:
   import network
@@ -56,6 +58,7 @@ battery_list = {
 @asm_pio(
   in_shiftdir=PIO.SHIFT_RIGHT,
   fifo_join=PIO.JOIN_RX,
+  push_thresh=8
 )
 def uart_rx():
   # fmt: off
@@ -190,28 +193,56 @@ class OTAUpdater:
 
 class RuipuBattery:
   """" This class handles interactions with the es200 batteries via UART or StateMachine """
-  def __init__(self, sm=None, uart=None, tp="", name=""):
+  
+  def __init__(self, sm=None, uart=None, sm_num = 0, tp="", name=""):
     self.sm = sm
+    self.sm_num = sm_num
     self.uart = uart
     self.tp = tp
     self.bytesRead = 0
     self.buf = bytearray(36)
+    self.word_buf = array('L',range(36))
     self.pack_name = name
     self.buf_set_for_debug = False
+    self.ctrl = None
+    
+    if self.tp == 'sm':
+
+      self.dma = DMA()
+      treq = self.sm_num + 4 # SM0-3 -> DREQ 4-7
+      if self.sm_num > 3:
+        treq = self.sm_num + 8 #SM4-7 -> DREQ 12-15
+
+      self.ctrl = self.dma.pack_ctrl(
+        treq_sel=treq,
+        inc_read=False,
+        inc_write=True,
+        size=2
+      )
+      self.start_dma()
 
   # def unlock(self):
   #   self.reset() # clear any lingering data in input buffer
   #   buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
   #   self.sm.write(buf)
   
+  def start_dma(self):
+    self.dma.config(
+      read=self.sm,
+      write=self.word_buf,
+      count=len(self.buf),
+      ctrl=self.ctrl,
+      trigger=True
+    )
+
   def reset(self):
     """ Reset the port by reading any pending bytes from the queue/FIFO """
 
     if self.tp == 'sm':
-      while (self.sm.rx_fifo() > 0):
-        self.sm.get()
-      self.bytesRead = 0
+      self.dma.active(0)
       self.sm.restart()
+      self.start_dma()
+
     elif self.tp == 'uart':
       while self.uart.any() > 0:
         self.uart.read(1)
@@ -221,12 +252,17 @@ class RuipuBattery:
     """ Reads bytes from queue/FIFO to build buffer. Checks parity. Returns true when full, valid buffer exists """
     
     if self.tp == 'sm':
-      while (self.sm.rx_fifo() > 0 and self.bytesRead < 36):
-        word = self.sm.get() # get returns a 32-bit word.  need just 8 bits of that
-        b = bytearray()
-        b.append(word >> 24)
-        self.buf[self.bytesRead] = b[0] # 1st element of bytes object (even though there is only one anyway)
-        self.bytesRead += 1
+      if self.dma.active():
+        pass
+      else:
+        self.start_dma()  # set up DMA for next loop
+
+        for n,w in enumerate(self.word_buf):
+          self.buf[n] = w >> 24
+          self.bytesRead = 36
+          
+        # print(f"{bytes(self.buf).hex()}")
+
     elif self.tp == 'uart':
       while self.uart.any() > 0 and self.bytesRead < 36:
         b = self.uart.read(1)
@@ -366,16 +402,13 @@ class RuipuBattery:
       #   nano_time = time_ns() # influx expects nanoseconds since UNIX epoch
       #   influx_string += f" {nano_time}"
       influx_string += "\n"
-      # if debug_flag == True:
-      # print(influx_string)
       if self.buf_set_for_debug == True:
         sleep(0.0375) # simulate time to read the chars
         self.buf_set_for_debug = False
       return influx_string
     else:
       return None
-          
-          
+                 
 
 def connectWifi():
   global ntp_time_synced
@@ -489,15 +522,15 @@ def main():
     battery_instance_list = []
 
     # set up the instances pointing to the hard and PIO UARTS
-    sm_count = 0 
+    sm_num = 0 
     for battery in battery_list:
-      if sm_count == 4:
-        sm_count += 1 # skip SM0 on PIO1 since is used by wifi
+      if sm_num == 4:
+        sm_num += 1 # skip SM0 on PIO1 since is used by wifi
       if battery_list[battery]['tp'] == 'uart':
         battery_instance_list.append(RuipuBattery(tp='uart', uart=uart, name=battery))
       elif battery_list[battery]['tp'] == 'sm':
         sm = StateMachine(
-              sm_count,
+              sm_num,
               uart_rx,
               freq=8 * UART_BAUD,
               in_base=battery_list[battery]['pin'],  # For WAIT, IN
@@ -505,8 +538,9 @@ def main():
           )
         sm.irq(handler)
         sm.active(1)
-        battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, name=battery))
-        sm_count += 1
+        
+        battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, sm_num=sm_num, name=battery))
+        sm_num += 1
 
     # start outputing the unlock code right away
     # tell core 1 to reset each hard/soft UART then output the unlock key every UNLOCK_CODE_WAIT seconds
@@ -525,6 +559,7 @@ def main():
     ttp = localtime(time() + 60) # first target time during next minute
     ttp = (ttp[0],ttp[1],ttp[2],ttp[3],ttp[4],30,ttp[6],ttp[7]) # set to half minute
     target_time = mktime(ttp)
+    
     while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
       log_string = ""
       for n, battery in enumerate(battery_instance_list):
