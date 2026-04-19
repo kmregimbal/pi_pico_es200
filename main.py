@@ -58,7 +58,7 @@ battery_list = {
 @asm_pio(
   in_shiftdir=PIO.SHIFT_RIGHT,
   fifo_join=PIO.JOIN_RX,
-  push_thresh=8
+  push_thresh=32,
 )
 def uart_rx():
   # fmt: off
@@ -84,6 +84,8 @@ def uart_rx():
   # No delay before returning to start; a little slack is
   # important in case the TX clock is slightly too fast.
   label("good_stop")
+  # when doing single byte DMA, it reads most (least?) significant byte only.  so shift by 3 bytes
+  in_(null,24)
   push(block)
   # fmt: on
 
@@ -201,7 +203,7 @@ class RuipuBattery:
     self.tp = tp
     self.bytesRead = 0
     self.buf = bytearray(36)
-    self.word_buf = array('L',range(36))
+    # self.word_buf = array('L',range(36))
     self.pack_name = name
     self.buf_set_for_debug = False
     self.ctrl = None
@@ -215,9 +217,9 @@ class RuipuBattery:
 
       self.ctrl = self.dma.pack_ctrl(
         treq_sel=treq,
-        inc_read=False,
-        inc_write=True,
-        size=2
+        inc_read=False, # always read from sm FIFO
+        inc_write=True, # increment write position in self.buf as you go
+        size=0 # single byte
       )
       self.start_dma()
 
@@ -229,7 +231,7 @@ class RuipuBattery:
   def start_dma(self):
     self.dma.config(
       read=self.sm,
-      write=self.word_buf,
+      write=self.buf,
       count=len(self.buf),
       ctrl=self.ctrl,
       trigger=True
@@ -256,12 +258,7 @@ class RuipuBattery:
         pass
       else:
         self.start_dma()  # set up DMA for next loop
-
-        for n,w in enumerate(self.word_buf):
-          self.buf[n] = w >> 24
-          self.bytesRead = 36
-          
-        # print(f"{bytes(self.buf).hex()}")
+        self.bytesRead = 36  
 
     elif self.tp == 'uart':
       while self.uart.any() > 0 and self.bytesRead < 36:

@@ -28,7 +28,7 @@ def uart_rx_mini():
 @asm_pio(
         in_shiftdir=PIO.SHIFT_RIGHT,
         fifo_join=PIO.JOIN_RX,
-        push_thresh=8,
+        push_thresh=32,
 )
 def uart_rx():
   # fmt: off
@@ -54,6 +54,8 @@ def uart_rx():
   # No delay before returning to start; a little slack is
   # important in case the TX clock is slightly too fast.
   label("good_stop")
+  # when doing single byte DMA, it reads most (least?) significant byte only.  so shift by 3 bytes
+  in_(null,24)
   push(block)
   # fmt: on
 
@@ -85,13 +87,13 @@ ctrl = dma.pack_ctrl(
     treq_sel=4,       # DREQ for PIO0 SM0 (Consult RP2040 datasheet for others)
     inc_read=False,    # Step through our data buffer
     inc_write=True,  # Always write to the same PIO TX FIFO register
-    size=2            # 0 = Byte (8-bit) transfers
+    size=0            # 0 = Byte (8-bit) transfers
 )
 
 # 5. Trigger Transfer
 dma.config(
     read=sm,
-    write=word_buffer,         # MicroPython handles the FIFO address internally
+    write=data_buffer,         # MicroPython handles the FIFO address internally
     count=len(data_buffer),
     ctrl=ctrl,
     trigger=True,
@@ -102,9 +104,11 @@ uart.write(buf)
 while dma.count:
     pass
 
-for n,w in enumerate(word_buffer):
-    data_buffer[n] = w >> 24
-
-print(f"DMA Active: {dma.active()}")
-
 print(f"{bytes(data_buffer).hex()}")
+
+# for n,w in enumerate(word_buffer):
+#     data_buffer[n] = w >> 24
+
+# print(f"DMA Active: {dma.active()}")
+
+# print(f"{bytes(data_buffer).hex()}")
