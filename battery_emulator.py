@@ -1,10 +1,13 @@
 from machine import Pin, UART
 
 uart0 = UART(1, baudrate=9600, tx=Pin(4, Pin.OUT), rx=Pin(5, Pin.IN, Pin.PULL_UP))
+led = Pin("LED", Pin.OUT)
 
 def send_data():
+    led.on()
     data = bytearray.fromhex('3A1620020064641E1E1E1F1901000F0000000020001CA30000270400005C104010522C0A')
     uart0.write(data)
+    led.off()
 
 def main():
     rxData = bytes()
