@@ -243,11 +243,13 @@ class RuipuBattery:
     if self.tp == 'sm':
       self.dma.active(0)
       self.sm.restart()
+      self.bytesRead = 0
       self.start_dma()
 
     elif self.tp == 'uart':
       while self.uart.any() > 0:
         self.uart.read(1)
+      self.bytesRead = 0  
       pass
 
   def read(self):
