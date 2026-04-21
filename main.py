@@ -8,22 +8,18 @@ from array import array
 import os
 import json
 from sys import exit
+import network
+import urequests as requests
+import socket
 
-try:
-  import network
-  import urequests as requests
-  import socket
-  from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
-  wlan = network.WLAN(network.STA_IF)  # WiFi
-  
-  is_pico_w = True
-except Exception as e:
-  is_pico_w = False
+from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
+
+wlan = network.WLAN(network.STA_IF)  # WiFi
 
 debug_flag = True
-no_battery = False
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
+
 WIFI_POST_TRIES = 10
 wifi_post_tries_left = WIFI_POST_TRIES
 UNLOCK_CODE_WAIT = 4.9
@@ -35,13 +31,6 @@ firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
 UART_BAUD = 9600
 HARD_UART_TX_PIN = Pin(4, Pin.OUT) # pin 6
 HARD_UART_RX_PIN = Pin(5, Pin.IN, Pin.PULL_UP) # pin 7
-RUN_PIN = Pin(3, Pin.IN, Pin.PULL_UP)
-NO_BATT_PIN = Pin(11,Pin.IN, Pin.PULL_UP) # indicate no batteries will communicate.
-if is_pico_w == False: # so we can run on normal pi pico
-  RUN_PIN = Pin(3, Pin.IN, Pin.PULL_DOWN)
-if NO_BATT_PIN.value() == 0: # short to ground to use fake data
-  print("Fake data will be used since no batteries are available")
-  no_battery = True
 battery_list = {
   # 'B01': Pin(8, Pin.IN, Pin.PULL_UP), # pin 11
   'B01': {'tp': 'uart'}, # pin 7
@@ -401,9 +390,7 @@ class RuipuBattery:
       #   nano_time = time_ns() # influx expects nanoseconds since UNIX epoch
       #   influx_string += f" {nano_time}"
       influx_string += "\n"
-      if self.buf_set_for_debug == True:
-        sleep(0.0375) # simulate time to read the chars
-        self.buf_set_for_debug = False
+      self.reset() # reset now that data has been read/used
       return influx_string
     else:
       return None
@@ -483,13 +470,12 @@ def postToInflux(data):
 
 def core1_task(uart,battery_instance_list):
   """ This loop sends unlock code every """
-  while RUN_PIN.value() == 0:
+  while True:
     for battery in battery_instance_list:
      battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
     uart.write(buf)
-    if is_pico_w == False:
-        print(".",end="")
+
     sleep(UNLOCK_CODE_WAIT)
 
 def logit(message):
@@ -511,106 +497,92 @@ def main():
   global wifi_post_tries_left
   successful_posts = 0
 
-  # check to make sure the RUN_PIN is low
-  if RUN_PIN.value() == 1:
-    print("RUN_PIN is high.  Bailing out!")
-    sleep(2)
-  else:   
-    # Set up the hard UART
-    uart = UART(1, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
-    battery_instance_list = []
+ 
+  # Set up the hard UART
+  uart = UART(1, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
+  battery_instance_list = []
 
-    # set up the instances pointing to the hard and PIO UARTS
-    sm_num = 0 
-    for battery in battery_list:
-      if sm_num == 4:
-        sm_num += 1 # skip SM0 on PIO1 since is used by wifi
-      if battery_list[battery]['tp'] == 'uart':
-        battery_instance_list.append(RuipuBattery(tp='uart', uart=uart, name=battery))
-      elif battery_list[battery]['tp'] == 'sm':
-        sm = StateMachine(
-              sm_num,
-              uart_rx,
-              freq=8 * UART_BAUD,
-              in_base=battery_list[battery]['pin'],  # For WAIT, IN
-              jmp_pin=battery_list[battery]['pin'],  # For JMP
-          )
-        sm.irq(handler)
-        sm.active(1)
-        
-        battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, sm_num=sm_num, name=battery))
-        sm_num += 1
-
-    # start outputing the unlock code right away
-    # tell core 1 to reset each hard/soft UART then output the unlock key every UNLOCK_CODE_WAIT seconds
-    _thread.start_new_thread(core1_task, (uart,battery_instance_list))
-    
-    # connect wifi
-    if is_pico_w:
-      if connectWifi():
-        logit("Connected to WiFi")
-        ota_updater = OTAUpdater(firmware_url, "main.py")
-        ota_updater.download_and_install_update_if_available()
-    
-    influx_strings = [''] * len(battery_instance_list)
-
-    last_minute = 0
-    ttp = localtime(time() + 60) # first target time during next minute
-    ttp = (ttp[0],ttp[1],ttp[2],ttp[3],ttp[4],30,ttp[6],ttp[7]) # set to half minute
-    target_time = mktime(ttp)
-    
-    while RUN_PIN.value() == 0: # bail unless the RUN_PIN is low
-      log_string = ""
-      for n, battery in enumerate(battery_instance_list):
-
-        if no_battery == True:
-          # data = bytearray.fromhex('3A1620020064641D1C1C1C1301000F0000000020008EA10000000000002F101F10522C2E')
-          data = bytearray.fromhex('3A1620020064641E1E1E1F1901000F0000000020001CA30000270400005C104010522C0A')
-          battery.setbuf(data)
-        
-        influx_string = battery.influx_string()
-        if influx_string is not None:
-          influx_strings[n] = influx_string
-          log_string += f"({battery.name()}) "
-
-      if no_battery == True:
-        sleep(UNLOCK_CODE_WAIT) # simulate time just waiting for next text to start appearing on UARTS
+  # set up the instances pointing to the hard and PIO UARTS
+  sm_num = 0 
+  for battery in battery_list:
+    if sm_num == 4:
+      sm_num += 1 # skip SM0 on PIO1 since is used by wifi
+    if battery_list[battery]['tp'] == 'uart':
+      battery_instance_list.append(RuipuBattery(tp='uart', uart=uart, name=battery))
+    elif battery_list[battery]['tp'] == 'sm':
+      sm = StateMachine(
+            sm_num,
+            uart_rx,
+            freq=8 * UART_BAUD,
+            in_base=battery_list[battery]['pin'],  # For WAIT, IN
+            jmp_pin=battery_list[battery]['pin'],  # For JMP
+        )
+      sm.irq(handler)
+      sm.active(1)
       
-      minute = localtime()[4]
-      if minute != last_minute:
-        target_time = time() + 30
-        last_minute = minute
+      battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, sm_num=sm_num, name=battery))
+      sm_num += 1
+
+  # start outputing the unlock code right away
+  # tell core 1 to reset each hard/soft UART then output the unlock key every UNLOCK_CODE_WAIT seconds
+  _thread.start_new_thread(core1_task, (uart,battery_instance_list))
+  
+  # connect wifi
+  if connectWifi():
+    logit("Connected to WiFi")
+    ota_updater = OTAUpdater(firmware_url, "main.py")
+    ota_updater.download_and_install_update_if_available()
+  
+  influx_strings = [''] * len(battery_instance_list)
+
+  last_minute = 0
+  ttp = localtime(time() + 60) # first target time during next minute
+  ttp = (ttp[0],ttp[1],ttp[2],ttp[3],ttp[4],30,ttp[6],ttp[7]) # set to half minute
+  target_time = mktime(ttp)
+  
+  while True:
+    log_string = ""
+    for n, battery in enumerate(battery_instance_list):
+
+      influx_string = battery.influx_string()
+      if influx_string is not None:
+        influx_strings[n] = influx_string
+        log_string += f"({battery.name()}) "
+    
+    minute = localtime()[4]
+    if minute != last_minute:
+      target_time = time() + 30
+      last_minute = minute
+    
+    if len(log_string) > 0:
+      logit(log_string)
+    
+    if time() > target_time:
+      target_time = time() + 60
       
-      if len(log_string) > 0:
-        logit(log_string)
+      influx_string = ""
+      for work_string in influx_strings:
+        if work_string is not None:
+          influx_string += work_string
       
-      if time() > target_time:
-        target_time = time() + 60
-        
-        influx_string = ""
-        for work_string in influx_strings:
-          if work_string is not None:
-            influx_string += work_string
-        
-        if debug_flag == True:
-          logit(f'Posting data\n{influx_string}')
-        
-        if is_pico_w:
-          try:
-            if postToInflux(influx_string) == True:
-              successful_posts = successful_posts + 1
-              logit(f"Post #{successful_posts} to influxdb Successfull")
-              wifi_post_tries_left = WIFI_POST_TRIES
-            else:
-              wifi_post_tries_left -= 1
-              logit(f"Posting data failed. {wifi_post_tries_left} tries left.")
-              if wifi_post_tries_left < 1:
-                restart_pico()
-          except Exception as e:
-            wifi_post_tries_left -= 1
-            logit(f"Posting data Failed via exception [{e}]. {wifi_post_tries_left} tries left.")
-            if wifi_post_tries_left < 1:
-                restart_pico()
+      if debug_flag == True:
+        logit(f'Posting data\n{influx_string}')
+      
+      try:
+        if postToInflux(influx_string) == True:
+          successful_posts = successful_posts + 1
+          logit(f"Post #{successful_posts} to influxdb Successfull")
+          wifi_post_tries_left = WIFI_POST_TRIES
+        else:
+          wifi_post_tries_left -= 1
+          logit(f"Posting data failed. {wifi_post_tries_left} tries left.")
+          if wifi_post_tries_left < 1:
+            restart_pico()
+      except Exception as e:
+        wifi_post_tries_left -= 1
+        logit(f"Posting data Failed via exception [{e}]. {wifi_post_tries_left} tries left.")
+        if wifi_post_tries_left < 1:
+            restart_pico()
 
 if __name__ == '__main__':
   main()
