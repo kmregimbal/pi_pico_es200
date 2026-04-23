@@ -20,6 +20,8 @@ debug_flag = True
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 led = Pin("LED", Pin.OUT)
+stop_pin = Pin(16, Pin.IN, Pin.PULL_UP)
+running = True # so we can exit if the button is pushed
 
 WIFI_POST_TRIES = 10
 wifi_post_tries_left = WIFI_POST_TRIES
@@ -474,7 +476,8 @@ def postToInflux(data):
 
 def core1_task(uart,battery_instance_list):
   """ This loop sends unlock code every """
-  while True:
+  global running
+  while running:
     for battery in battery_instance_list:
      battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
@@ -497,12 +500,21 @@ def restart_pico():
   logit("Restarting Pico due to wifi/influx posting issue")
   machine.reset()  # Reset the device to run the new code.
 
+def button_handler(pin):
+  global running
+  logit("forced exit")
+  running = False
+  exit(0)
+
+
 
 def main():
   # bad practice <sigh>
   global wifi_post_tries_left
+  global running
   successful_posts = 0
 
+  stop_pin.irq(trigger=Pin.IRQ_RISING,handler=button_handler)
  
   # Set up the hard UART
   uart = UART(0, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
@@ -547,6 +559,7 @@ def main():
   target_time = mktime(ttp)
   
   while True:
+    
     log_string = ""
     for n, battery in enumerate(battery_instance_list):
 

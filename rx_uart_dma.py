@@ -68,7 +68,7 @@ RX_PIN = Pin(12, Pin.IN, Pin.PULL_UP)
 data_buffer = bytearray.fromhex('001600020064001D001C00130000000000000020008E000000000000002F101F10522C2E')
 word_buffer = array('L',range(36))
 
-uart = UART(1, UART_BAUD, rx=Pin(5, Pin.IN, Pin.PULL_UP), tx=Pin(4, Pin.OUT))
+uart = UART(0, UART_BAUD, rx=Pin(1, Pin.IN, Pin.PULL_UP), tx=Pin(0, Pin.OUT))
 
 # 3. Initialize State Machine
 sm = StateMachine(0,uart_rx, freq=8 * UART_BAUD, in_base=RX_PIN, jmp_pin=RX_PIN)
