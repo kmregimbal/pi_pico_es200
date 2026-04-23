@@ -19,6 +19,7 @@ wlan = network.WLAN(network.STA_IF)  # WiFi
 debug_flag = True
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
+led = Pin("LED", Pin.OUT)
 
 WIFI_POST_TRIES = 10
 wifi_post_tries_left = WIFI_POST_TRIES
@@ -29,16 +30,16 @@ firmware_url = "https://github.com/kmregimbal/pi_pico_es200/"
 
 # Serial Communications
 UART_BAUD = 9600
-HARD_UART_TX_PIN = Pin(4, Pin.OUT) # pin 6
-HARD_UART_RX_PIN = Pin(5, Pin.IN, Pin.PULL_UP) # pin 7
+HARD_UART_TX_PIN = Pin(0, Pin.OUT) # pin 6
+HARD_UART_RX_PIN = Pin(1, Pin.IN, Pin.PULL_UP) # pin 7
 battery_list = {
   # 'B01': Pin(8, Pin.IN, Pin.PULL_UP), # pin 11
   'B01': {'tp': 'uart'}, # pin 7
-  'B02': {'pin': Pin(9, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
+  'B02': {'pin': Pin(11, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 12
   'B03': {'pin': Pin(12, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 16
   'B04': {'pin': Pin(13, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 17
-  'B05': {'pin': Pin(16, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
-  'B06': {'pin': Pin(17, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
+  'B05': {'pin': Pin(18, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 21
+  'B06': {'pin': Pin(19, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 22
   'B07': {'pin': Pin(20, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 26
   'B08': {'pin': Pin(21, Pin.IN, Pin.PULL_UP), 'tp': 'sm'}, # pin 27
   }
@@ -272,6 +273,9 @@ class RuipuBattery:
     self.buf = inbuf
     self.buf_set_for_debug = True
 
+  def readbuf(self):
+    return self.buf
+
   """ These functions pull data from relevant bytes in the buffer """
   def maxTemp(self):
     maxTemp = 0
@@ -371,7 +375,7 @@ class RuipuBattery:
   def influx_string(self):
     """ create influxdb string.  this part not so reusable, but convenient for my application """
     
-    if self.read() or self.buf_set_for_debug == True:
+    if (self.read() or self.buf_set_for_debug == True) and any(self.buf): # any() test strips out false all zeros buf if input left floating
       power = self.voltage() * self.current()
       discharge_enabled = 0
       
@@ -446,7 +450,7 @@ def connectWifi():
 def postToInflux(data):
   """ Post influx line format data to influxdb server"""
 
-  # connect to wifi if needed
+    # connect to wifi if needed
   if wlan.isconnected():
     pass
   else:
@@ -479,7 +483,9 @@ def core1_task(uart,battery_instance_list):
     sleep(UNLOCK_CODE_WAIT)
 
 def logit(message):
+  led.on()
   print(message)
+  led.off()
   message = f"pi_pico_es200: {message}"
   if syslog_sock is not None:
     try:
@@ -499,7 +505,7 @@ def main():
 
  
   # Set up the hard UART
-  uart = UART(1, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
+  uart = UART(0, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
   battery_instance_list = []
 
   # set up the instances pointing to the hard and PIO UARTS
@@ -564,6 +570,8 @@ def main():
       for work_string in influx_strings:
         if work_string is not None:
           influx_string += work_string
+      
+      influx_strings = [''] * len(battery_instance_list)
       
       if debug_flag == True:
         logit(f'Posting data\n{influx_string}')
