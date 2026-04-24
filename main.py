@@ -16,7 +16,7 @@ from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_O
 
 wlan = network.WLAN(network.STA_IF)  # WiFi
 
-debug_flag = True
+debug_flag = False
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 led = Pin("LED", Pin.OUT)
@@ -574,7 +574,7 @@ def main():
       last_minute = minute
       
     
-    if len(log_string) > 0:
+    if len(log_string) > 0 and debug_flag == True:
       log_string = f"[{log_string.count('B')}] " + log_string
       logit(log_string)
     
