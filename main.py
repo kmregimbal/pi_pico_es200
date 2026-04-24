@@ -572,8 +572,10 @@ def main():
     if minute != last_minute:
       target_time = time() + 30
       last_minute = minute
+      
     
     if len(log_string) > 0:
+      log_string = f"[{log_string.count('B')}] " + log_string
       logit(log_string)
     
     if time() > target_time:
@@ -589,19 +591,21 @@ def main():
       if debug_flag == True:
         logit(f'Posting data\n{influx_string}')
       
+      time_parts = localtime()
+      time_string = f"{time_parts[3]:02}:{time_parts[4]:02}:{time_parts[5]:02} GMT"
       try:
         if postToInflux(influx_string) == True:
           successful_posts = successful_posts + 1
-          logit(f"Post #{successful_posts} to influxdb Successfull")
+          logit(f"Post #{successful_posts} to influxdb Successfull at {time_string}")
           wifi_post_tries_left = WIFI_POST_TRIES
         else:
           wifi_post_tries_left -= 1
-          logit(f"Posting data failed. {wifi_post_tries_left} tries left.")
+          logit(f"Posting data failed at {time_string}. {wifi_post_tries_left} tries left.")
           if wifi_post_tries_left < 1:
             restart_pico()
       except Exception as e:
         wifi_post_tries_left -= 1
-        logit(f"Posting data Failed via exception [{e}]. {wifi_post_tries_left} tries left.")
+        logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
         if wifi_post_tries_left < 1:
             restart_pico()
 
