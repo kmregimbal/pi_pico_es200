@@ -16,11 +16,11 @@ from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_O
 
 wlan = network.WLAN(network.STA_IF)  # WiFi
 
-debug_flag = False
 ntp_time_synced = False
 syslog_sock = None  # syslog via UDP
 led = Pin("LED", Pin.OUT)
 stop_pin = Pin(16, Pin.IN, Pin.PULL_UP)
+debug_pin = Pin(5,Pin.IN, Pin.PULL_UP)
 running = True # so we can exit if the button is pushed
 
 WIFI_POST_TRIES = 10
@@ -574,7 +574,7 @@ def main():
       last_minute = minute
       
     
-    if len(log_string) > 0 and debug_flag == True:
+    if len(log_string) > 0 and debug_pin.value() == 0:
       log_string = f"[{log_string.count('B')}] " + log_string
       logit(log_string)
     
@@ -588,7 +588,7 @@ def main():
       
       influx_strings = [''] * len(battery_instance_list)
       
-      if debug_flag == True:
+      if debug_pin.value() == 0:
         logit(f'Posting data\n{influx_string}')
       
       time_parts = localtime()
