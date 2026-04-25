@@ -12,7 +12,18 @@ import network
 import urequests as requests
 import socket
 
-from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_HOST, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, SYSLOG_HOST, SYSLOG_PORT
+import CONFIG as config
+# from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_TOKEN
+
+# INFLUX_ORG    = "dkcabo"
+# INFLUX_BUCKET = "energy_data"
+# SYSLOG_PORT   = 514
+# IP_CIDR       = "192.168.2.19/24"
+# IP_GW         = "192.168.2.1"
+# DNS_SRV       = "192.168.2.1"
+
+# HOST = '192.168.2.155'
+
 
 wlan = network.WLAN(network.STA_IF)  # WiFi
 
@@ -91,13 +102,13 @@ class OTAUpdater:
     self.filename = filename
     self.repo_url = repo_url
     if "www.github.com" in self.repo_url :
-      logit(f"Updating {repo_url} to raw.githubusercontent")
+      # logit(f"Updating {repo_url} to raw.githubusercontent")
       self.repo_url = self.repo_url.replace("www.github","raw.githubusercontent")
     elif "github.com" in self.repo_url:
-      logit(f"Updating {repo_url} to raw.githubusercontent'")
+      # logit(f"Updating {repo_url} to raw.githubusercontent'")
       self.repo_url = self.repo_url.replace("github","raw.githubusercontent")            
     self.version_url = self.repo_url + 'main/version.json'
-    logit(f"version url is: {self.version_url}")
+    # logit(f"version url is: {self.version_url}")
     self.firmware_url = self.repo_url + 'main/' + filename
 
     # get the current version (stored in version.json)
@@ -159,20 +170,20 @@ class OTAUpdater:
   def check_for_updates(self):
     """ Check if updates are available."""
     
-    logit(f'Checking for latest version... on {self.version_url}')
+    # logit(f'Checking for latest version... on {self.version_url}')
     response = requests.get(self.version_url)
     
     data = json.loads(response.text)
     
     logit(f"data is: {data}, url is: {self.version_url}")
-    logit(f"data version is: {data['version']}")
+    # logit(f"data version is: {data['version']}")
     self.latest_version = int(data['version'])
     logit(f'latest version is: {self.latest_version}')
     
     # compare versions
     newer_version_available = True if self.current_version < self.latest_version else False
     
-    logit(f'Newer version available: {newer_version_available}')    
+    # logit(f'Newer version available: {newer_version_available}')    
     return newer_version_available
   
   def download_and_install_update_if_available(self):
@@ -418,7 +429,10 @@ def connectWifi():
     pass
 
   wlan.active(True)
-  wlan.connect(WIFI_SSID,WIFI_PASSWORD)
+  wlan.ipconfig(gw4=config.IP_GW)
+  wlan.ipconfig(addr4=config.IP_CIDR)
+  network.ipconfig(dns=config.DNS_SRV)
+  wlan.connect(config.WIFI_SSID,config.WIFI_PASSWORD)
   
 
   max_wait = 10
@@ -459,9 +473,9 @@ def postToInflux(data):
     print("ReConnecting to wifi...")
     connectWifi()
 
-  url = f"http://{INFLUX_HOST}:8086/api/v2/write?org={INFLUX_ORG}&bucket={INFLUX_BUCKET}"
+  url = f"http://{config.HOST}:8086/api/v2/write?org={config.INFLUX_ORG}&bucket={config.INFLUX_BUCKET}"
   headers = {
-      "Authorization": f"Token {INFLUX_TOKEN}",
+      "Authorization": f"Token {config.INFLUX_TOKEN}",
       "Content-Type": "text/plain; charset=utf-8",
       "Accept": "application/json"
   }
@@ -492,7 +506,7 @@ def logit(message):
   message = f"pi_pico_es200: {message}"
   if syslog_sock is not None:
     try:
-      syslog_sock.sendto(message.encode(), (SYSLOG_HOST,SYSLOG_PORT))
+      syslog_sock.sendto(message.encode(), (config.HOST,config.SYSLOG_PORT))
     except Exception as e:
       print(f"Error during syslog: {e}")
 
