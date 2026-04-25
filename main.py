@@ -1,10 +1,9 @@
 import struct
 import _thread
-from machine import Pin, UART
+from machine import Pin, UART, reset
 from rp2 import PIO, StateMachine, asm_pio, DMA
 from time import sleep, time, localtime, mktime
 from ntptime import settime
-from array import array
 import os
 import json
 from sys import exit
@@ -12,23 +11,12 @@ import network
 import urequests as requests
 import socket
 
-import CONFIG as config
-# from CONFIG import WIFI_SSID, WIFI_PASSWORD, INFLUX_TOKEN
-
-# INFLUX_ORG    = "dkcabo"
-# INFLUX_BUCKET = "energy_data"
-# SYSLOG_PORT   = 514
-# IP_CIDR       = "192.168.2.19/24"
-# IP_GW         = "192.168.2.1"
-# DNS_SRV       = "192.168.2.1"
-
-# HOST = '192.168.2.155'
-
+import CONFIG as config                             # type: ignore
 
 wlan = network.WLAN(network.STA_IF)  # WiFi
 
 ntp_time_synced = False
-syslog_sock = None  # syslog via UDP
+syslog_sock = socket.socket()  # syslog via UDP
 led = Pin("LED", Pin.OUT)
 stop_pin = Pin(16, Pin.IN, Pin.PULL_UP)
 debug_pin = Pin(5,Pin.IN, Pin.PULL_UP)
@@ -65,31 +53,31 @@ battery_list = {
 )
 def uart_rx():
   # fmt: off
-  label("start")
+  label("start")                                        # type: ignore
   # Stall until start bit is asserted
-  wait(0, pin, 0)
+  wait(0, pin, 0)                                       # type: ignore
   # Preload bit counter, then delay until halfway through
   # the first data bit (12 cycles incl wait, set).
-  set(x, 7)                 [10]
-  label("bitloop")
+  set(x, 7)                 [10]                        # type: ignore
+  label("bitloop")                                      # type: ignore
   # Shift data bit into ISR
-  in_(pins, 1)
+  in_(pins, 1)                                          # type: ignore
   # Loop 8 times, each loop iteration is 8 cycles
-  jmp(x_dec, "bitloop")     [6]
+  jmp(x_dec, "bitloop")     [6]                         # type: ignore
   # Check stop bit (should be high)
-  jmp(pin, "good_stop")
+  jmp(pin, "good_stop")                                 # type: ignore
   # Either a framing error or a break. Set a sticky flag
   # and wait for line to return to idle state.
-  irq(block, 4)
-  wait(1, pin, 0)
+  irq(block, 4)                                         # type: ignore
+  wait(1, pin, 0)                                       # type: ignore
   # Don't push data if we didn't see good framing.
-  jmp("start")
+  jmp("start")                                          # type: ignore
   # No delay before returning to start; a little slack is
   # important in case the TX clock is slightly too fast.
-  label("good_stop")
+  label("good_stop")                                    # type: ignore
   # when doing single byte DMA, it reads most (least?) significant byte only.  so shift by 3 bytes
-  in_(null,24)
-  push(block)
+  in_(null,24)                                          # type: ignore
+  push(block)                                           # type: ignore
   # fmt: on
 
 # The handler for a UART break detected by the PIO.
@@ -137,6 +125,7 @@ class OTAUpdater:
     elif response.status_code == 404:
       logit(f'Firmware not found - {self.firmware_url}.')
       return False
+    return False
 
   def update_no_reset(self):
     """ Update the code without resetting the device."""
@@ -165,7 +154,7 @@ class OTAUpdater:
 
     # Restart the device to run the new code.
     logit('Restarting device...')
-    machine.reset()  # Reset the device to run the new code.
+    reset()  # Reset the device to run the new code.
       
   def check_for_updates(self):
     """ Check if updates are available."""
@@ -199,17 +188,16 @@ class OTAUpdater:
 class RuipuBattery:
   """" This class handles interactions with the es200 batteries via UART or StateMachine """
   
-  def __init__(self, sm=None, uart=None, sm_num = 0, tp="", name=""):
+  def __init__(self, sm=StateMachine(0), uart=UART(0), sm_num = 0, tp="", name=""):
     self.sm = sm
     self.sm_num = sm_num
     self.uart = uart
     self.tp = tp
     self.bytesRead = 0
     self.buf = bytearray(36)
-    # self.word_buf = array('L',range(36))
     self.pack_name = name
     self.buf_set_for_debug = False
-    self.ctrl = None
+    self.ctrl = 0
     
     if self.tp == 'sm':
 
@@ -266,6 +254,7 @@ class RuipuBattery:
         self.bytesRead = 36  
 
     elif self.tp == 'uart':
+
       while self.uart.any() > 0 and self.bytesRead < 36:
         b = self.uart.read(1)
         self.buf[self.bytesRead] = b[0]
@@ -434,7 +423,6 @@ def connectWifi():
   network.ipconfig(dns=config.DNS_SRV)
   wlan.connect(config.WIFI_SSID,config.WIFI_PASSWORD)
   
-
   max_wait = 10
   print('Waiting to connect',end="")
   while max_wait > 0:
@@ -450,14 +438,16 @@ def connectWifi():
     return False
   else:
     print('connected')
-    status = wlan.ifconfig()
-    print('ip = ' + status[0])
+    status = wlan.ipconfig('addr4')
+    print('ip = ',end='')
+    print(status)
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
     try:
       settime()
       ntp_time_synced = True
-      logit(f"Time Synced")
+      time_now = localtime()
+      logit(f"Time Synced.  Time now is {time_now[3]:02}:{time_now[4]:02}:{time_now[5]:02} GMT")
     except Exception as e:
       logit(f"Time Sync failed: {e}")
     
@@ -490,16 +480,18 @@ def postToInflux(data):
 
 def core1_task(uart,battery_instance_list):
   """ This loop sends unlock code every """
+  
   global running
   while running:
     for battery in battery_instance_list:
      battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
     uart.write(buf)
-
     sleep(UNLOCK_CODE_WAIT)
 
 def logit(message):
+  """ Send log/debug message to stdout and syslog if available """
+  
   led.on()
   print(message)
   led.off()
@@ -511,16 +503,18 @@ def logit(message):
       print(f"Error during syslog: {e}")
 
 def restart_pico():
+  """ Restart pico.  Probably because of network issues. """
+
   logit("Restarting Pico due to wifi/influx posting issue")
-  machine.reset()  # Reset the device to run the new code.
+  reset()  # Reset the device to run the new code.
 
 def button_handler(pin):
+  """ Handle IRQ for a button press and halt the program """
+
   global running
   logit("forced exit")
   running = False
   exit(0)
-
-
 
 def main():
   # bad practice <sigh>
@@ -528,13 +522,14 @@ def main():
   global running
   successful_posts = 0
 
+  # set up the IRQ for the button
   stop_pin.irq(trigger=Pin.IRQ_RISING,handler=button_handler)
  
   # Set up the hard UART
   uart = UART(0, UART_BAUD, tx=HARD_UART_TX_PIN, rx=HARD_UART_RX_PIN)
-  battery_instance_list = []
 
   # set up the instances pointing to the hard and PIO UARTS
+  battery_instance_list = []
   sm_num = 0 
   for battery in battery_list:
     if sm_num == 4:
