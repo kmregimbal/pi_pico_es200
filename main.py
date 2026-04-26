@@ -220,6 +220,8 @@ class RuipuBattery:
   #   self.sm.write(buf)
   
   def start_dma(self):
+    """ Trigger start of DMA transfer for _this_ state machine """
+
     self.dma.config(
       read=self.sm,
       write=self.buf,
@@ -254,7 +256,6 @@ class RuipuBattery:
         self.bytesRead = 36  
 
     elif self.tp == 'uart':
-
       while self.uart.any() > 0 and self.bytesRead < 36:
         b = self.uart.read(1)
         self.buf[self.bytesRead] = b[0]
@@ -403,6 +404,7 @@ class RuipuBattery:
                  
 
 def connectWifi():
+  """ Connect to wifi network and set up syslog socket """
   global ntp_time_synced
   global syslog_sock
 
@@ -417,6 +419,7 @@ def connectWifi():
   except:
     pass
 
+  # set up interface and connect
   wlan.active(True)
   wlan.ipconfig(gw4=config.IP_GW)
   wlan.ipconfig(addr4=config.IP_CIDR)
@@ -444,7 +447,7 @@ def connectWifi():
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
     try:
-      settime()
+      settime() # grab GMT from NTP server and set local time
       ntp_time_synced = True
       time_now = localtime()
       logit(f"Time Synced.  Time now is {time_now[3]:02}:{time_now[4]:02}:{time_now[5]:02} GMT")
@@ -454,7 +457,7 @@ def connectWifi():
     return True
 
 def postToInflux(data):
-  """ Post influx line format data to influxdb server"""
+  """ Post influx line format data to influxdb server """
 
     # connect to wifi if needed
   if wlan.isconnected():
@@ -479,7 +482,7 @@ def postToInflux(data):
  
 
 def core1_task(uart,battery_instance_list):
-  """ This loop sends unlock code every """
+  """ This loop sends unlock code every UNLOCK_CODE_WAIT seconds """
   
   global running
   while running:
@@ -610,12 +613,10 @@ def main():
         else:
           wifi_post_tries_left -= 1
           logit(f"Posting data failed at {time_string}. {wifi_post_tries_left} tries left.")
-          if wifi_post_tries_left < 1:
-            restart_pico()
       except Exception as e:
         wifi_post_tries_left -= 1
         logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
-        if wifi_post_tries_left < 1:
+    if wifi_post_tries_left < 1:
             restart_pico()
 
 if __name__ == '__main__':
