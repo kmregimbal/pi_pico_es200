@@ -409,7 +409,7 @@ def connectWifi():
   # clean up any outstanding connections
   try:
     syslog_sock.close()
-    syslog_ready == False
+    syslog_ready = False
   except:
     pass
   try:
