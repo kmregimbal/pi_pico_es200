@@ -14,13 +14,16 @@ import socket
 import CONFIG as config                             # type: ignore
 
 wlan = network.WLAN(network.STA_IF)  # WiFi
+network_ready = False
 
 ntp_time_synced = False
 syslog_sock = socket.socket()  # syslog via UDP
+syslog_ready = False
 led = Pin("LED", Pin.OUT)
 stop_pin = Pin(16, Pin.IN, Pin.PULL_UP)
 debug_pin = Pin(5,Pin.IN, Pin.PULL_UP)
 running = True # so we can exit if the button is pushed
+poll_triggered = False
 
 WIFI_POST_TRIES = 10
 wifi_post_tries_left = WIFI_POST_TRIES
@@ -90,13 +93,10 @@ class OTAUpdater:
     self.filename = filename
     self.repo_url = repo_url
     if "www.github.com" in self.repo_url :
-      # logit(f"Updating {repo_url} to raw.githubusercontent")
       self.repo_url = self.repo_url.replace("www.github","raw.githubusercontent")
     elif "github.com" in self.repo_url:
-      # logit(f"Updating {repo_url} to raw.githubusercontent'")
       self.repo_url = self.repo_url.replace("github","raw.githubusercontent")            
     self.version_url = self.repo_url + 'main/version.json'
-    # logit(f"version url is: {self.version_url}")
     self.firmware_url = self.repo_url + 'main/' + filename
 
     # get the current version (stored in version.json)
@@ -159,20 +159,17 @@ class OTAUpdater:
   def check_for_updates(self):
     """ Check if updates are available."""
     
-    # logit(f'Checking for latest version... on {self.version_url}')
     response = requests.get(self.version_url)
     
     data = json.loads(response.text)
     
     logit(f"data is: {data}, url is: {self.version_url}")
-    # logit(f"data version is: {data['version']}")
     self.latest_version = int(data['version'])
     logit(f'latest version is: {self.latest_version}')
     
     # compare versions
     newer_version_available = True if self.current_version < self.latest_version else False
     
-    # logit(f'Newer version available: {newer_version_available}')    
     return newer_version_available
   
   def download_and_install_update_if_available(self):
@@ -243,7 +240,6 @@ class RuipuBattery:
       while self.uart.any() > 0:
         self.uart.read(1)
       self.bytesRead = 0  
-      pass
 
   def read(self):
     """ Reads bytes from queue/FIFO to build buffer. Checks parity. Returns true when full, valid buffer exists """
@@ -375,7 +371,7 @@ class RuipuBattery:
         extract >>= 1
     return hex(crc)
   
-  def influx_string(self):
+  def create_influx_string(self):
     """ create influxdb string.  this part not so reusable, but convenient for my application """
     
     if (self.read() or self.buf_set_for_debug == True) and any(self.buf): # any() test strips out false all zeros buf if input left floating
@@ -407,15 +403,19 @@ def connectWifi():
   """ Connect to wifi network and set up syslog socket """
   global ntp_time_synced
   global syslog_sock
+  global syslog_ready
+  global network_ready
 
   # clean up any outstanding connections
   try:
     syslog_sock.close()
+    syslog_ready == False
   except:
     pass
   try:
     wlan.disconnect()
     wlan.active(False)
+    network_ready = False
   except:
     pass
 
@@ -438,6 +438,8 @@ def connectWifi():
   
   if wlan.status() != 3:
     print('Network Connection has failed')
+    syslog_ready = False
+    network_ready = False
     return False
   else:
     print('connected')
@@ -446,6 +448,8 @@ def connectWifi():
     print(status)
     syslog_sock = socket.socket(socket.AF_INET, #internet
                                   socket.SOCK_DGRAM) # UDP
+    syslog_ready = True
+    network_ready = True
     try:
       settime() # grab GMT from NTP server and set local time
       ntp_time_synced = True
@@ -459,10 +463,9 @@ def connectWifi():
 def postToInflux(data):
   """ Post influx line format data to influxdb server """
 
-    # connect to wifi if needed
-  if wlan.isconnected():
-    pass
-  else:
+  global network_ready
+  # connect to wifi if needed
+  if network_ready == False:
     print("ReConnecting to wifi...")
     connectWifi()
 
@@ -472,34 +475,40 @@ def postToInflux(data):
       "Content-Type": "text/plain; charset=utf-8",
       "Accept": "application/json"
   }
-  response = requests.post(url, headers=headers, data=data, timeout=5)
-  response_code = response.status_code
-  response.close()
-  if response_code != 204:  
-    logit(f"Response code was: {response_code}")
+  try:
+    response = requests.post(url, headers=headers, data=data, timeout=5)
+    response_code = response.status_code
+    response.close()
+    if response_code != 204:  
+      logit(f"Response code was: {response_code}")
+      return False
+    return True
+  except Exception as e:
+    logit(f"Influxdb post failed via exception {e}")
     return False
-  return True
- 
 
 def core1_task(uart,battery_instance_list):
   """ This loop sends unlock code every UNLOCK_CODE_WAIT seconds """
   
   global running
+  global poll_triggered
   while running:
     for battery in battery_instance_list:
      battery.reset()
     buf = b'\x3A\x13\x01\x16\x79' # unlock code for es200g batteries
     uart.write(buf)
+    poll_triggered = True
     sleep(UNLOCK_CODE_WAIT)
 
 def logit(message):
   """ Send log/debug message to stdout and syslog if available """
   
+  global syslog_ready
   led.on()
   print(message)
   led.off()
   message = f"pi_pico_es200: {message}"
-  if syslog_sock is not None:
+  if syslog_ready:
     try:
       syslog_sock.sendto(message.encode(), (config.HOST,config.SYSLOG_PORT))
     except Exception as e:
@@ -516,13 +525,14 @@ def button_handler(pin):
 
   global running
   logit("forced exit")
-  running = False
+  running = False # signal 2nd thread to exit
   exit(0)
 
 def main():
   # bad practice <sigh>
   global wifi_post_tries_left
   global running
+  global poll_triggered
   successful_posts = 0
 
   # set up the IRQ for the button
@@ -552,6 +562,7 @@ def main():
       
       battery_instance_list.append(RuipuBattery(tp='sm', sm=sm, sm_num=sm_num, name=battery))
       sm_num += 1
+  sorted_battery_instances = sorted(battery_instance_list, key=lambda x: x.name())
 
   # start outputing the unlock code right away
   # tell core 1 to reset each hard/soft UART then output the unlock key every UNLOCK_CODE_WAIT seconds
@@ -572,52 +583,59 @@ def main():
   
   while True:
     
-    log_string = ""
-    for n, battery in enumerate(battery_instance_list):
+    while poll_triggered == False:
+      # while we're waiting, might as well post to influx when its time
+      minute = localtime()[4]
+      if minute != last_minute:
+        target_time = time() + 30
+        last_minute = minute
+      if time() > target_time:
+        target_time = time() + 60
+        
+        influx_string = ""
+        for work_string in influx_strings:
+          if work_string is not None:
+            influx_string += work_string
+        
+        influx_strings = [''] * len(battery_instance_list)
+        
+        if debug_pin.value() == 0:
+          logit(f'Posting data\n{influx_string}')
+        
+        time_parts = localtime()
+        time_string = f"{time_parts[3]:02}:{time_parts[4]:02}:{time_parts[5]:02} GMT"
+        try:
+          if postToInflux(influx_string) == True:
+            successful_posts = successful_posts + 1
+            logit(f"Post #{successful_posts} to influxdb Successfull at {time_string}")
+            wifi_post_tries_left = WIFI_POST_TRIES
+          else:
+            wifi_post_tries_left -= 1
+            logit(f"Posting data failed at {time_string}. {wifi_post_tries_left} tries left.")
+        except Exception as e:
+          wifi_post_tries_left -= 1
+          logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
+      if wifi_post_tries_left < 1:
+              restart_pico()
 
-      influx_string = battery.influx_string()
+    poll_triggered = False # set for next loop
+    sleep(0.1) # 36 bytes at 9600 baud take ~.0375.  Wait about 2x that to allow DMAs to finish.
+
+    log_string = ""
+    for n, battery in enumerate(sorted_battery_instances):
+
+      influx_string = battery.create_influx_string()
       if influx_string is not None:
         influx_strings[n] = influx_string
         log_string += f"({battery.name()}) "
     
-    minute = localtime()[4]
-    if minute != last_minute:
-      target_time = time() + 30
-      last_minute = minute
-      
     
+      
     if len(log_string) > 0 and debug_pin.value() == 0:
       log_string = f"[{log_string.count('B')}] " + log_string
       logit(log_string)
     
-    if time() > target_time:
-      target_time = time() + 60
-      
-      influx_string = ""
-      for work_string in influx_strings:
-        if work_string is not None:
-          influx_string += work_string
-      
-      influx_strings = [''] * len(battery_instance_list)
-      
-      if debug_pin.value() == 0:
-        logit(f'Posting data\n{influx_string}')
-      
-      time_parts = localtime()
-      time_string = f"{time_parts[3]:02}:{time_parts[4]:02}:{time_parts[5]:02} GMT"
-      try:
-        if postToInflux(influx_string) == True:
-          successful_posts = successful_posts + 1
-          logit(f"Post #{successful_posts} to influxdb Successfull at {time_string}")
-          wifi_post_tries_left = WIFI_POST_TRIES
-        else:
-          wifi_post_tries_left -= 1
-          logit(f"Posting data failed at {time_string}. {wifi_post_tries_left} tries left.")
-      except Exception as e:
-        wifi_post_tries_left -= 1
-        logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
-    if wifi_post_tries_left < 1:
-            restart_pico()
+
 
 if __name__ == '__main__':
   main()
