@@ -599,7 +599,7 @@ def main():
         
         influx_strings = [''] * len(battery_instance_list)
         
-        if debug_pin.value() == 0:
+        if debug_pin.value() == 0: # active when pulled low
           logit(f'Posting data\n{influx_string}')
         
         time_parts = localtime()
@@ -617,6 +617,7 @@ def main():
           logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
       if wifi_post_tries_left < 1:
               restart_pico()
+    # end of while loop
 
     poll_triggered = False # set for next loop
     sleep(0.1) # 36 bytes at 9600 baud take ~.0375.  Wait about 2x that to allow DMAs to finish.
@@ -631,11 +632,10 @@ def main():
     
     
       
-    if len(log_string) > 0 and debug_pin.value() == 0:
+    if len(log_string) > 0 and debug_pin.value() == 0: # debug pin is active when pulled low
       log_string = f"[{log_string.count('B')}] " + log_string
       logit(log_string)
-    
-
+  # end of while loop
 
 if __name__ == '__main__':
   main()
