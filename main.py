@@ -457,6 +457,7 @@ def connectWifi():
       logit(f"Time Synced.  Time now is {time_now[3]:02}:{time_now[4]:02}:{time_now[5]:02} GMT")
     except Exception as e:
       logit(f"Time Sync failed: {e}")
+      ntp_time_synced = False
     
     return True
 
@@ -533,6 +534,7 @@ def main():
   global wifi_post_tries_left
   global running
   global poll_triggered
+  global ntp_time_synced
   successful_posts = 0
 
   # set up the IRQ for the button
@@ -580,6 +582,8 @@ def main():
   ttp = localtime(time() + 60) # first target time during next minute
   ttp = (ttp[0],ttp[1],ttp[2],ttp[3],ttp[4],30,ttp[6],ttp[7]) # set to half minute
   target_time = mktime(ttp)
+
+  resync_time_target = time() + 60*60#*24 # re-sync to NTP server daily
   
   while True:
     
@@ -589,6 +593,17 @@ def main():
       if minute != last_minute:
         target_time = time() + 30
         last_minute = minute
+        if time() > resync_time_target:
+          resync_time_target = time() + 60*60#*24 # re-sync to NTP server daily
+          try:
+            settime() # grab GMT from NTP server and set local time
+            ntp_time_synced = True
+            time_now = localtime()
+            logit(f"Time Synced.  Time now is {time_now[3]:02}:{time_now[4]:02}:{time_now[5]:02} GMT")
+          except Exception as e:
+            logit(f"Time Sync failed: {e}")
+            ntp_time_synced = False
+
       if time() > target_time:
         target_time = time() + 60
         
