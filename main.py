@@ -185,7 +185,7 @@ class OTAUpdater:
 class RuipuBattery:
   """" This class handles interactions with the es200 batteries via UART or StateMachine """
   
-  def __init__(self, sm=StateMachine(0), uart=UART(0), sm_num = 0, tp="", name=""):
+  def __init__(self, sm=StateMachine(0), uart=UART(0), sm_num = 0, tp="", name=""): # type: ignore
     self.sm = sm
     self.sm_num = sm_num
     self.uart = uart
@@ -254,7 +254,7 @@ class RuipuBattery:
     elif self.tp == 'uart':
       while self.uart.any() > 0 and self.bytesRead < 36:
         b = self.uart.read(1)
-        self.buf[self.bytesRead] = b[0]
+        self.buf[self.bytesRead] = b[0] # type: ignore
         self.bytesRead += 1
     
     if self.bytesRead > 35:
