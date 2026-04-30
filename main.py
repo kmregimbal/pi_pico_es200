@@ -421,6 +421,7 @@ def connectWifi():
 
   # set up interface and connect
   wlan.active(True)
+  wlan.ipconfig(dhcp4=False)
   wlan.ipconfig(gw4=config.IP_GW)
   wlan.ipconfig(addr4=config.IP_CIDR)
   network.ipconfig(dns=config.DNS_SRV)
