@@ -16,6 +16,9 @@ import CONFIG as config                             # type: ignore
 wlan = network.WLAN(network.STA_IF)  # WiFi
 network_ready = False
 
+adcpin = 4
+sensor = machine.ADC(adcpin)
+
 ntp_time_synced = False
 syslog_sock = socket.socket()  # syslog via UDP
 syslog_ready = False
@@ -617,6 +620,11 @@ def main():
         
         if debug_pin.value() == 0: # active when pulled low
           logit(f'Posting data\n{influx_string}')
+          adc_value = sensor.read_u16()
+          volt = (3.3/65525) * adc_value
+          temperature = 27 - (volt - 0.706)/0.001721
+          round_temp = round(temperature,1)
+          logit(f'Temperature: {round_temp} C')
         
         time_parts = localtime()
         time_string = f"{time_parts[3]:02}:{time_parts[4]:02}:{time_parts[5]:02} GMT"
@@ -633,6 +641,7 @@ def main():
           logit(f"Posting data Failed via exception [{e}] at {time_string}. {wifi_post_tries_left} tries left.")
       if wifi_post_tries_left < 1:
               restart_pico()
+      sleep(0.1)
     # end of while loop
 
     poll_triggered = False # set for next loop
